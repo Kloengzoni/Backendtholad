@@ -2,15 +2,55 @@
 
 use Illuminate\Support\Facades\Route;
 
-// FIX #2 — Suppression des controllers inexistants.
-// Le projet est une API + panel admin uniquement.
-// Les routes web utilisateurs n'ont pas de controllers — on redirige vers l'admin.
+/*
+|--------------------------------------------------------------------------
+| WEB ROUTES
+|--------------------------------------------------------------------------
+| Projet : ImmoStay — Tholad Group
+| API + Admin Panel
+| Compatible Railway / Production
+*/
 
+/**
+ * 🔥 HEALTH CHECK / ROOT
+ * IMPORTANT : Railway utilise "/" pour vérifier le service
+ */
 Route::get('/', function () {
-    return redirect()->route('admin.login');
+    return response()->json([
+        'status' => 'ok',
+        'app' => 'ImmoStay — Tholad Group',
+        'version' => '1.0.0'
+    ]);
 });
 
-// Route de santé publique
+/**
+ * 🩺 HEALTH ENDPOINT (monitoring externe)
+ */
 Route::get('/health', function () {
-    return response()->json(['status' => 'ok', 'app' => 'ImmoStay — Tholad Group']);
+    return response()->json([
+        'status' => 'ok',
+        'service' => 'running'
+    ]);
+});
+
+/**
+ * 🔐 ADMIN ENTRY POINT (safe fallback)
+ * ⚠️ Ne casse pas si route admin.login n’existe pas
+ */
+Route::get('/admin', function () {
+    // Si tu as un panel admin plus tard, remplace ceci
+    return response()->json([
+        'status' => 'admin-entry',
+        'message' => 'Admin panel available'
+    ]);
+});
+
+/**
+ * 🚫 FALLBACK 404 WEB (optionnel mais propre)
+ */
+Route::fallback(function () {
+    return response()->json([
+        'status' => 'error',
+        'message' => 'Route not found'
+    ], 404);
 });

@@ -3,18 +3,24 @@
 namespace App\Providers;
 
 use Illuminate\Support\ServiceProvider;
+use Illuminate\Support\Facades\Schema;
 
-/**
- * En Laravel 11, le routage est géré dans bootstrap/app.php.
- * Ce provider est conservé pour compatibilité mais ne fait rien.
- */
-class RouteServiceProvider extends ServiceProvider
+class AppServiceProvider extends ServiceProvider
 {
-    public const HOME = '/admin';
-    public const ADMIN_HOME = '/admin';
+    /**
+     * Register any application services.
+     */
+    public function register(): void
+    {
+        //
+    }
 
+    /**
+     * Bootstrap any application services.
+     */
     public function boot(): void
     {
-        // Laravel 11 : routing configuré dans bootstrap/app.php
+        // Fix compatibilité MySQL anciennes versions (utf8mb4 index limit)
+        Schema::defaultStringLength(191);
     }
 }

@@ -1,5 +1,5 @@
 <?php
-// app/Http/Middleware/AdminMiddleware.php
+
 namespace App\Http\Middleware;
 
 use Closure;
@@ -10,20 +10,45 @@ class AdminMiddleware
 {
     public function handle(Request $request, Closure $next)
     {
-        if (!Auth::guard('admin')->check()) {
+        $guard = Auth::guard('admin');
+
+        // Si pas connecté
+        if (!$guard->check()) {
+            if ($request->expectsJson()) {
+                return response()->json([
+                    'message' => 'Unauthorized'
+                ], 401);
+            }
+
             return redirect()->route('admin.login');
         }
 
-        $user = Auth::guard('admin')->user();
+        $user = $guard->user();
 
-        if ($user->role !== 'admin') {
-            Auth::guard('admin')->logout();
+        // Sécurité role (évite null crash)
+        if (($user->role ?? null) !== 'admin') {
+            $guard->logout();
+
+            if ($request->expectsJson()) {
+                return response()->json([
+                    'message' => 'Access denied'
+                ], 403);
+            }
+
             return redirect()->route('admin.login')
                 ->withErrors(['email' => 'Accès réservé aux administrateurs.']);
         }
 
-        if (!$user->is_active) {
-            Auth::guard('admin')->logout();
+        // Check account actif sécurisé
+        if (!($user->is_active ?? false)) {
+            $guard->logout();
+
+            if ($request->expectsJson()) {
+                return response()->json([
+                    'message' => 'Account suspended'
+                ], 403);
+            }
+
             return redirect()->route('admin.login')
                 ->withErrors(['email' => 'Compte administrateur suspendu.']);
         }
