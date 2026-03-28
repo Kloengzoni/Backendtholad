@@ -12,9 +12,12 @@ class Agent extends Authenticatable
     protected $fillable = [
         'user_id','name','email','phone','avatar','password',
         'role','department','employee_id','hire_date','salary','salary_currency',
+        'contract_type',
         'can_manage_properties','can_manage_bookings','can_manage_payments',
-        'can_manage_stock','can_view_reports',
-        'emergency_contact_name','emergency_contact_phone',
+        'can_manage_stock','can_view_reports','can_manage_users','can_manage_agents',
+        'emergency_contact_name','emergency_contact_phone','emergency_contact_relation',
+        'address','city','country',
+        'id_document_type','id_document_number',
         'status','notes','last_login_at',
     ];
 
@@ -28,6 +31,8 @@ class Agent extends Authenticatable
         'can_manage_payments'    => 'boolean',
         'can_manage_stock'       => 'boolean',
         'can_view_reports'       => 'boolean',
+        'can_manage_users'       => 'boolean',
+        'can_manage_agents'      => 'boolean',
         'salary'                 => 'float',
     ];
 

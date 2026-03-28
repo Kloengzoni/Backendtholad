@@ -34,7 +34,11 @@ Route::prefix('admin')->name('admin.')->group(function () {
         // PROPERTIES
         Route::prefix('properties')->group(function () {
             Route::get('/',              [PropertyController::class, 'index'])->name('properties.index');
+            Route::get('create',         [PropertyController::class, 'create'])->name('properties.create');
+            Route::post('/',             [PropertyController::class, 'store'])->name('properties.store');
             Route::get('{id}',           [PropertyController::class, 'show'])->name('properties.show');
+            Route::get('{id}/edit',      [PropertyController::class, 'edit'])->name('properties.edit');
+            Route::put('{id}',           [PropertyController::class, 'update'])->name('properties.update');
             Route::put('{id}/approve',   [PropertyController::class, 'approve'])->name('properties.approve');
             Route::delete('{id}',        [PropertyController::class, 'destroy'])->name('properties.destroy');
         });

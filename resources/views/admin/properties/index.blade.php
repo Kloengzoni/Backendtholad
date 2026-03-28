@@ -7,6 +7,9 @@
     <h2 style="font-family:'Cormorant Garamond',serif;font-size:24px;font-weight:700">Gestion des propriétés</h2>
     <p style="color:var(--txt3);font-size:13px">{{ $properties->total() }} propriétés au total</p>
   </div>
+  <a href="{{ route('admin.properties.create') }}" class="btn btn-primary">
+    <i class="fas fa-plus"></i> Nouvelle propriété
+  </a>
 </div>
 
 <!-- Filters -->

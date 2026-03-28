@@ -41,19 +41,25 @@ class AgentController extends Controller
             'phone'    => 'nullable|string|max:30',
             'role'     => 'required|in:agent_commercial,gestionnaire,comptable,technicien,superviseur,directeur',
             'password' => 'required|min:8|confirmed',
+            'avatar'   => 'nullable|image|max:3072',
         ]);
 
-        $data = $request->except('password','password_confirmation');
+        $data = $request->except(['password','password_confirmation','_token','avatar']);
         $data['password'] = Hash::make($request->password);
 
-        // Permissions selon le rôle
-        if ($request->role === 'directeur' || $request->role === 'superviseur') {
-            $data['can_manage_payments'] = true;
-            $data['can_view_reports']    = true;
-        }
-        if ($request->role === 'comptable') {
-            $data['can_manage_payments'] = true;
-            $data['can_view_reports']    = true;
+        // Permissions explicites depuis le formulaire
+        $data['can_manage_properties'] = $request->has('can_manage_properties') ? 1 : 0;
+        $data['can_manage_bookings']   = $request->has('can_manage_bookings')   ? 1 : 0;
+        $data['can_manage_stock']      = $request->has('can_manage_stock')      ? 1 : 0;
+        $data['can_manage_payments']   = $request->has('can_manage_payments')   ? 1 : 0;
+        $data['can_view_reports']      = $request->has('can_view_reports')      ? 1 : 0;
+        $data['can_manage_users']      = $request->has('can_manage_users')      ? 1 : 0;
+        $data['can_manage_agents']     = $request->has('can_manage_agents')     ? 1 : 0;
+
+        // Avatar upload
+        if ($request->hasFile('avatar')) {
+            $path = $request->file('avatar')->store('agents/avatars', 'public');
+            $data['avatar'] = $path;
         }
 
         $agent = Agent::create($data);
