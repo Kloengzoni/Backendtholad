@@ -6,7 +6,8 @@ use App\Http\Controllers\Controller;
 use App\Models\Property;
 use App\Models\PropertyImage;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Storage;
+use App\Services\CloudinaryService;
+use Illuminate\Support\Facades\Log;
 
 class PropertyController extends Controller
 {
@@ -139,14 +140,28 @@ class PropertyController extends Controller
     {
         $request->validate(['images' => 'required|array', 'images.*' => 'image|max:5120']);
         $property = Property::findOrFail($id);
-        $hasPrimary = $property->images()->where('is_primary', true)->exists(); // FIX: is_primary
+        $hasPrimary = $property->images()->where('is_primary', true)->exists();
 
         foreach ($request->file('images', []) as $i => $file) {
-            $path = $file->store("properties/{$id}", 'public');
+            // Upload Cloudinary si configuré, sinon local
+            $cloudName = config('services.cloudinary.cloud_name');
+            if ($cloudName) {
+                try {
+                    $cloudinary = new CloudinaryService();
+                    $url = $cloudinary->upload($file, "immostay/properties/{$id}");
+                } catch (\Throwable $e) {
+                    Log::error('Cloudinary upload failed: ' . $e->getMessage());
+                    $path = $file->store("properties/{$id}", 'public');
+                    $url  = \Storage::url($path);
+                }
+            } else {
+                $path = $file->store("properties/{$id}", 'public');
+                $url  = \Storage::url($path);
+            }
             PropertyImage::create([
                 'property_id' => $property->id,
-                'url'         => Storage::url($path),
-                'is_primary'  => !$hasPrimary && $i === 0, // FIX: is_primary
+                'url'         => $url,
+                'is_primary'  => !$hasPrimary && $i === 0,
                 'sort_order'  => $property->images()->count() + $i,
             ]);
         }

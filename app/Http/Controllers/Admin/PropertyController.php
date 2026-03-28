@@ -7,11 +7,32 @@ use App\Models\Property;
 use App\Models\PropertyImage;
 use App\Models\PropertyAmenity;
 use App\Models\User;
+use App\Services\CloudinaryService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Log;
 
 class PropertyController extends Controller
 {
+    // ─── Upload image : Cloudinary en prod, local en dev ───────────────────
+    private function uploadImage($file, int $propertyId): string
+    {
+        $cloudName = config('services.cloudinary.cloud_name');
+
+        if ($cloudName) {
+            try {
+                $cloudinary = new CloudinaryService();
+                return $cloudinary->upload($file, "immostay/properties/{$propertyId}");
+            } catch (\Throwable $e) {
+                Log::error('Cloudinary upload failed: ' . $e->getMessage());
+            }
+        }
+
+        // Fallback : stockage local (dev)
+        $path = $file->store('properties/' . $propertyId, 'public');
+        return Storage::url($path);
+    }
+
     public function index(Request $request)
     {
         $properties = Property::with(['owner', 'primaryImage'])
@@ -73,14 +94,14 @@ class PropertyController extends Controller
             'is_approved'       => (bool)($request->is_approved ?? false),
         ]);
 
-        // Upload images
+        // Upload images → Cloudinary
         if ($request->hasFile('images')) {
             $sort = 0;
             foreach ($request->file('images') as $file) {
-                $path = $file->store('properties/' . $property->id, 'public');
+                $url = $this->uploadImage($file, $property->id);
                 PropertyImage::create([
                     'property_id' => $property->id,
-                    'url'         => Storage::url($path),
+                    'url'         => $url,
                     'is_primary'  => $sort === 0,
                     'sort_order'  => $sort++,
                 ]);
@@ -171,15 +192,15 @@ class PropertyController extends Controller
         $property->is_featured = $request->has('is_featured');
         $property->save();
 
-        // New images
+        // Nouvelles images → Cloudinary
         if ($request->hasFile('images')) {
             $sort = $property->images()->max('sort_order') + 1;
             foreach ($request->file('images') as $file) {
-                $path = $file->store('properties/' . $property->id, 'public');
+                $url = $this->uploadImage($file, $property->id);
                 PropertyImage::create([
                     'property_id' => $property->id,
-                    'url'         => Storage::url($path),
-                    'is_primary'  => $sort === 0 && $property->images()->count() === 0,
+                    'url'         => $url,
+                    'is_primary'  => $sort === 1 && $property->images()->count() === 0,
                     'sort_order'  => $sort++,
                 ]);
             }
