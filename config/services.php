@@ -62,4 +62,18 @@ return [
         'api_secret' => env('CLOUDINARY_API_SECRET'),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Peexit — Collect API (Mobile Money : MTN, Airtel, Orange...)
+    | Doc : https://peex-api-docs.peexit.com/collect/collections
+    |--------------------------------------------------------------------------
+    */
+    'peexit' => [
+        'base_url'         => env('PEEX_BASE_URL', 'https://dev-backend.peexit.com/api/v1'),
+        'secret_key'       => env('PEEX_SECRET_KEY'),
+        // Credentials Basic Auth du webhook Peexit → votre serveur
+        'callback_user'    => env('PEEX_CALLBACK_USER', 'peex'),
+        'callback_password'=> env('PEEX_CALLBACK_PASSWORD', 'peex_callback'),
+    ],
+
 ];
