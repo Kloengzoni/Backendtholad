@@ -113,7 +113,8 @@
         </div>
         <div class="form-group">
           <label>Période de facturation *</label>
-          <select name="price_period" class="form-control" required>
+          <select name="price_period" id="price-period-select" class="form-control" required>
+            <option value="heure"  {{ old('price_period')=='heure'?'selected':'' }}>Par heure</option>
             <option value="nuit"   {{ old('price_period')=='nuit'?'selected':'' }}>Par nuit</option>
             <option value="jour"   {{ old('price_period','jour')=='jour'?'selected':'' }}>Par jour</option>
             <option value="semaine"{{ old('price_period')=='semaine'?'selected':'' }}>Par semaine</option>
@@ -123,6 +124,28 @@
           </select>
         </div>
       </div>
+      <!-- Champ durée en heures (visible seulement si période = heure) -->
+      <div id="heures-field" style="display:none;margin-bottom:16px;">
+        <div class="grid-2">
+          <div class="form-group">
+            <label><i class="fas fa-clock" style="color:var(--tholad-blue);"></i> Durée minimale de location *</label>
+            <select name="duration_hours" id="duration-hours-select" class="form-control">
+              <option value="">— Choisir la durée —</option>
+              @for($h=1;$h<=12;$h++)
+              <option value="{{ $h }}" {{ old('duration_hours')==$h?'selected':'' }}>{{ $h }} heure{{ $h>1?'s':'' }}</option>
+              @endfor
+              <option value="24" {{ old('duration_hours')==24?'selected':'' }}>Journée complète (24h)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label><i class="fas fa-calculator" style="color:var(--tholad-blue);"></i> Aperçu tarif</label>
+            <div style="background:var(--bg-soft);border:1px solid var(--border);border-radius:8px;padding:10px 14px;font-size:14px;min-height:42px;display:flex;align-items:center;">
+              <span id="tarif-apercu-text" style="color:var(--txt3);">Saisissez prix + heures</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div class="grid-2">
         <div class="form-group">
           <label>Devise</label>
