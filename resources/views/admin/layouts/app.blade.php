@@ -196,7 +196,7 @@ select.form-control{cursor:pointer;}
            alt="Tholad Group">
     </div>
     <div class="sidebar-logo-text">
-      <h1>ImmoStay</h1>
+      <h1>TholadImmo</h1>
       <span>Tholad Group</span>
     </div>
   </div>
@@ -335,7 +335,7 @@ select.form-control{cursor:pointer;}
       <img src="{{ asset('images/tholad-logo.png') }}"
            onerror="this.style.display='none'"
            alt="Tholad Group">
-      <span>ImmoStay</span>
+      <span>TholadImmo</span>
     </div>
     <p>
       © {{ date('Y') }} <strong>TholadImmo</strong> — Tholad Group.
