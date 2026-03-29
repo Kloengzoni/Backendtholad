@@ -40,7 +40,9 @@ class PropertyController extends Controller
 
         // Stockage local (dev ou fallback) — URL absolue obligatoire
         $path = $file->store('properties/' . $propertyId, 'public');
-        return asset(Storage::url($path)); // FIX: asset() force l'URL absolue
+        // asset(Storage::url($path)) peut produire une double concaténation du domaine.
+        // On utilise url(Storage::url($path)) qui construit l'URL correcte sans duplication.
+        return url(Storage::url($path));
     }
 
     public function index(Request $request)
@@ -271,11 +273,32 @@ class PropertyController extends Controller
 
     public function destroy(string $id)
     {
-        Property::findOrFail($id)->update([
-            'status'      => 'suspendu',
-            'is_approved' => false,
-        ]);
-        return back()->with('success', 'Propriété suspendue.');
+        $property = Property::with('images')->findOrFail($id);
+
+        // Supprimer les images Cloudinary ou locales avant de supprimer la propriété
+        foreach ($property->images as $image) {
+            try {
+                $url = $image->url;
+                // Image Cloudinary
+                if (str_contains($url, 'res.cloudinary.com')) {
+                    $cloudinary = new CloudinaryService();
+                    $cloudinary->delete($url);
+                }
+                // Image locale dans storage
+                elseif (str_contains($url, '/storage/')) {
+                    $path = preg_replace('#^.*/storage/#', '', $url);
+                    Storage::disk('public')->delete($path);
+                }
+            } catch (\Throwable $e) {
+                Log::warning("Impossible de supprimer l'image {$image->id}: " . $e->getMessage());
+            }
+            $image->delete();
+        }
+
+        // Suppression complète de la propriété (cascade sur images, amenities etc.)
+        $property->delete();
+
+        return back()->with('success', 'Propriété supprimée définitivement.');
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
