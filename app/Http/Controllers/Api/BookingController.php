@@ -28,15 +28,14 @@ class BookingController extends Controller
 
     public function store(Request $request)
     {
-        // FIX: 'options' est nullable pour ne plus causer d'erreur 500
         $request->validate([
             'property_id' => 'required|exists:properties,id',
             'check_in'    => 'required|date|after_or_equal:today',
             'check_out'   => 'required|date|after:check_in',
             'guests'      => 'required|integer|min:1',
             'notes'       => 'nullable|string|max:500',
-            'options'     => 'nullable|array',       // FIX: accepté mais ignoré
-            'options.*'   => 'nullable|string',      // FIX: chaque option est une string
+            'options'     => 'nullable|array',
+            'options.*'   => 'nullable|string',
         ]);
 
         $property = Property::findOrFail($request->property_id);
@@ -48,7 +47,6 @@ class BookingController extends Controller
             ], 422);
         }
 
-        // FIX: vérifier max_guests seulement si défini
         if ($property->max_guests && $request->guests > $property->max_guests) {
             return response()->json([
                 'success' => false,
@@ -63,11 +61,10 @@ class BookingController extends Controller
         if ($nights < 1) {
             return response()->json([
                 'success' => false,
-                'message' => 'La durée du séjour doit être d\'au moins 1 nuit.',
+                'message' => "La durée du séjour doit être d'au moins 1 nuit.",
             ], 422);
         }
 
-        // Vérifier disponibilité
         $conflict = PropertyAvailability::where('property_id', $request->property_id)
             ->whereBetween('unavailable_date', [
                 $checkIn->toDateString(),
@@ -81,7 +78,6 @@ class BookingController extends Controller
             ], 409);
         }
 
-        // FIX: price peut être nul → protection avec null coalescing
         $price = (float) ($property->price ?? 0);
         if ($price <= 0) {
             return response()->json([
@@ -109,7 +105,6 @@ class BookingController extends Controller
             'notes'        => $request->notes,
         ]);
 
-        // Notification client
         Notification::create([
             'user_id' => $request->user()->id,
             'title'   => 'Réservation créée 📅',
@@ -168,19 +163,21 @@ class BookingController extends Controller
         return response()->json(['success' => true, 'message' => 'Réservation confirmée.']);
     }
 
-    // ── Ressource ────────────────────────────────────────────────
+    // ── Ressource ─────────────────────────────────────────────────────────────
     private function bookingResource(Booking $b): array
     {
         return [
             'id'             => $b->id,
             'reference'      => $b->reference,
-            'ref'            => $b->reference, // alias pour Flutter
-            'check_in'       => $b->check_in?->format('d/m/Y'),
-            'check_out'      => $b->check_out?->format('d/m/Y'),
+            'ref'            => $b->reference,
+            // FIX CRITIQUE : retourner en format ISO (yyyy-mm-dd)
+            // et non en "dd/mm/yyyy" qui crashe DateTime.parse() côté Flutter
+            'check_in'       => $b->check_in?->format('Y-m-d'),
+            'check_out'      => $b->check_out?->format('Y-m-d'),
             'nights'         => $b->nights,
             'guests'         => $b->guests,
             'base_amount'    => (float) $b->base_amount,
-            'fees_amount'    => (float) $b->fees_amount,
+            'fees_amount'    => (float) $b->fees_amount,   // FIX: fees_amount (pas services_fee)
             'total_amount'   => (float) $b->total_amount,
             'currency'       => $b->currency ?? 'XAF',
             'status'         => $b->status,
@@ -190,6 +187,7 @@ class BookingController extends Controller
             'property'       => $b->property ? [
                 'id'          => $b->property->id,
                 'title'       => $b->property->title,
+                'name'        => $b->property->title,
                 'city'        => $b->property->city,
                 'image_url'   => $b->property->primaryImage?->url,
                 'cover_image' => $b->property->primaryImage?->url,
