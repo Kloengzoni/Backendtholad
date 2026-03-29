@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Connexion Admin — ImmoStay</title>
+<title>Connexion Admin — TholadImmo</title>
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
 *{margin:0;padding:0;box-sizing:border-box;}
@@ -195,7 +195,7 @@ footer strong{color:#4B5563;font-weight:700;}
            onerror="this.style.display='none';document.getElementById('logo-fallback').style.display='block'"
            alt="Tholad Group">
       <div id="logo-fallback" style="display:none;font-size:52px;margin-bottom:10px">🏠</div>
-      <h1>ImmoStay</h1>
+      <h1>TholadImmo</h1>
       <p>Espace Administrateur — Tholad Group</p>
     </div>
 
@@ -268,8 +268,8 @@ footer strong{color:#4B5563;font-weight:700;}
     <span>ImmoStay</span>
   </div>
   <p>
-    © {{ date('Y') }} <strong>ImmoStay</strong> — Tholad Group.
-    Développé avec ❤️ par <strong>Basile NGASSAKI</strong>
+    © {{ date('Y') }} <strong>TholadImmo</strong> — Tholad Group.
+    Développé avec ❤️ par <strong>Basile NGASSAKI ZONI</strong>
   </p>
 </footer>
 
