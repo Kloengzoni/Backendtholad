@@ -6,7 +6,7 @@
   <a href="{{ route('admin.users.index') }}" class="btn btn-outline btn-sm">← Retour</a>
   <div style="flex:1">
     <h2 style="font-family:'Cormorant Garamond',serif;font-size:24px;font-weight:700">{{ $user->name }}</h2>
-    <p style="color:var(--txt3);font-size:13px">Inscrit {{ $user->created_at->diffForHumans() }}</p>
+    <p style="color:var(--txt3);font-size:13px">Inscrit {{ $user->created_at?->diffForHumans() ?? '—' }}</p>
   </div>
   <form action="{{ route('admin.users.toggle', $user->id) }}" method="POST">
     @csrf @method('PUT')

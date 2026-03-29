@@ -69,7 +69,7 @@
           </form>
         @endif
       </td>
-      <td style="font-size:12px;color:var(--txt3)">{{ $user->created_at->format('d/m/Y') }}</td>
+      <td style="font-size:12px;color:var(--txt3)">{{ $user->created_at?->format('d/m/Y') ?? '—' }}</td>
       <td><span class="badge-status {{ $user->is_active ? 'actif' : 'annulé' }}">{{ $user->is_active ? 'actif' : 'suspendu' }}</span></td>
       <td>
         <div style="display:flex;gap:6px">

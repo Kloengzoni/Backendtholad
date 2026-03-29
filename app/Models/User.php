@@ -9,12 +9,12 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 
 class User extends Authenticatable
 {
-    use HasApiTokens, HasFactory, Notifiable {
-        Notifiable::notifications as laravelNotifications;
-    }
+    use HasApiTokens, HasFactory, Notifiable;
 
     protected $fillable = [
         'name',
+        'first_name',
+        'last_name',
         'email',
         'phone',
         'country_code',
@@ -44,16 +44,17 @@ class User extends Authenticatable
     public function bookings()       { return $this->hasMany(Booking::class); }
     public function favorites()      { return $this->hasMany(Favorite::class); }
     public function reviews()        { return $this->hasMany(Review::class); }
-    public function notifications()  { return $this->hasMany(Notification::class); }
     public function payments()       { return $this->hasMany(Payment::class); }
     public function supportTickets() { return $this->hasMany(SupportTicket::class); }
+    public function ownerProfile()   { return $this->hasOne(OwnerProfile::class); }
 
     /**
-     * FIX — Relation propriétaire (manquait dans le fichier original)
+     * Notifications custom de l'application (App\Models\Notification)
+     * Renommée pour éviter le conflit avec Notifiable::notifications()
      */
-    public function ownerProfile()
+    public function appNotifications()
     {
-        return $this->hasOne(OwnerProfile::class);
+        return $this->hasMany(Notification::class);
     }
 
     // ── Helpers ──────────────────────────────────────────────────
