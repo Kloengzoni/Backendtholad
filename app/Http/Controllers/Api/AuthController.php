@@ -34,16 +34,19 @@ class AuthController extends Controller
             'country'      => $request->country,
             'password'     => Hash::make($request->password),
             'role'         => 'client',
-            'is_active'    => false, // FIX: is_active pas status
+            'is_active'    => false,
             'is_verified'  => false,
         ]);
 
-        $this->sendOtpToUser($user);
+        // Générer l'OTP et le retourner directement (mode gratuit — pas de SMS)
+        $otp = $this->generateOtp($user);
 
         return response()->json([
             'success' => true,
             'message' => 'Compte créé. Vérifiez votre numéro via OTP.',
             'phone'   => $user->phone,
+            'otp'     => $otp,           // ← OTP retourné directement dans la réponse
+            'otp_expires_in' => 10,      // minutes
         ], 201);
     }
 
@@ -64,10 +67,16 @@ class AuthController extends Controller
             return response()->json(['success' => false, 'message' => 'Identifiants incorrects.'], 401);
         }
 
-        // FIX: is_active pas status
         if (!$user->is_active) {
             if (!$user->is_verified) {
-                return response()->json(['success' => false, 'message' => 'Compte non vérifié. Vérifiez votre numéro via OTP.'], 403);
+                // Régénérer et retourner l'OTP pour comptes non vérifiés
+                $otp = $this->generateOtp($user);
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Compte non vérifié. Vérifiez votre numéro via OTP.',
+                    'otp'     => $otp,       // ← OTP retourné pour redirection vers l'écran OTP
+                    'phone'   => $user->phone,
+                ], 403);
             }
             return response()->json(['success' => false, 'message' => 'Compte suspendu. Contactez le support.'], 403);
         }
@@ -93,9 +102,20 @@ class AuthController extends Controller
         if ($v->fails()) return response()->json(['success' => false, 'errors' => $v->errors()], 422);
 
         $user = User::where('phone', $request->phone)->first();
-        if ($user) $this->sendOtpToUser($user);
 
-        return response()->json(['success' => true, 'message' => 'Si ce numéro existe, un OTP a été envoyé.']);
+        if (!$user) {
+            return response()->json(['success' => true, 'message' => 'Si ce numéro existe, un OTP a été envoyé.']);
+        }
+
+        // Générer et retourner l'OTP directement (mode gratuit)
+        $otp = $this->generateOtp($user);
+
+        return response()->json([
+            'success'        => true,
+            'message'        => 'Code OTP généré.',
+            'otp'            => $otp,       // ← Retourné directement dans l'app
+            'otp_expires_in' => 10,         // minutes
+        ]);
     }
 
     public function verifyOtp(Request $request)
@@ -116,7 +136,6 @@ class AuthController extends Controller
             return response()->json(['success' => false, 'message' => 'OTP invalide ou expiré.'], 422);
         }
 
-        // FIX: is_active pas status='active'
         $user->update([
             'is_verified'    => true,
             'is_active'      => true,
@@ -147,8 +166,19 @@ class AuthController extends Controller
     public function forgotPassword(Request $request)
     {
         $user = User::where('phone', $request->phone)->first();
-        if ($user) $this->sendOtpToUser($user);
-        return response()->json(['success' => true, 'message' => 'Si ce numéro existe, un OTP a été envoyé.']);
+
+        if (!$user) {
+            return response()->json(['success' => true, 'message' => 'Si ce numéro existe, un OTP a été envoyé.']);
+        }
+
+        $otp = $this->generateOtp($user);
+
+        return response()->json([
+            'success'        => true,
+            'message'        => 'Code OTP généré.',
+            'otp'            => $otp,
+            'otp_expires_in' => 10,
+        ]);
     }
 
     public function resetPassword(Request $request)
@@ -175,23 +205,28 @@ class AuthController extends Controller
         return response()->json(['success' => true, 'message' => 'Mot de passe réinitialisé.']);
     }
 
-    // ─────────────────────────────────────────────────────────────
-    private function sendOtpToUser(User $user): void
+    // ─────────────────────────────────────────────────────────────────────────
+    //  Générer l'OTP, le sauvegarder en base et le retourner
+    // ─────────────────────────────────────────────────────────────────────────
+    private function generateOtp(User $user): string
     {
         $otp = str_pad(random_int(0, 999999), 6, '0', STR_PAD_LEFT);
         $user->update([
             'otp_code'       => $otp,
             'otp_expires_at' => Carbon::now()->addMinutes(10),
         ]);
-        // TODO: Brancher AfricasTalking / Infobip pour l'envoi SMS réel
         \Log::info("OTP [{$user->phone}]: $otp");
+        return $otp;
     }
 
     private function userResource(User $user): array
     {
+        $nameParts = explode(' ', trim($user->name ?? ''));
         return [
             'id'           => $user->id,
             'name'         => $user->name,
+            'first_name'   => $nameParts[0] ?? '',
+            'last_name'    => count($nameParts) > 1 ? implode(' ', array_slice($nameParts, 1)) : '',
             'email'        => $user->email,
             'phone'        => $user->phone,
             'country_code' => $user->country_code,
@@ -199,7 +234,7 @@ class AuthController extends Controller
             'avatar_url'   => $user->avatar_url,
             'role'         => $user->role,
             'is_verified'  => $user->is_verified,
-            'is_active'    => $user->is_active,  // FIX
+            'is_active'    => $user->is_active,
             'created_at'   => $user->created_at,
         ];
     }
