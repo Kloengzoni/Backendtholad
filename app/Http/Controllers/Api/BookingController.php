@@ -28,21 +28,28 @@ class BookingController extends Controller
 
     public function store(Request $request)
     {
+        // FIX: 'options' est nullable pour ne plus causer d'erreur 500
         $request->validate([
             'property_id' => 'required|exists:properties,id',
             'check_in'    => 'required|date|after_or_equal:today',
             'check_out'   => 'required|date|after:check_in',
             'guests'      => 'required|integer|min:1',
             'notes'       => 'nullable|string|max:500',
+            'options'     => 'nullable|array',       // FIX: accepté mais ignoré
+            'options.*'   => 'nullable|string',      // FIX: chaque option est une string
         ]);
 
         $property = Property::findOrFail($request->property_id);
 
         if ($property->status !== 'disponible' || !$property->is_approved) {
-            return response()->json(['success' => false, 'message' => 'Ce bien n\'est pas disponible.'], 422);
+            return response()->json([
+                'success' => false,
+                'message' => "Ce bien n'est pas disponible.",
+            ], 422);
         }
 
-        if ($request->guests > $property->max_guests) {
+        // FIX: vérifier max_guests seulement si défini
+        if ($property->max_guests && $request->guests > $property->max_guests) {
             return response()->json([
                 'success' => false,
                 'message' => "Ce bien accueille maximum {$property->max_guests} personne(s).",
@@ -53,6 +60,13 @@ class BookingController extends Controller
         $checkOut = Carbon::parse($request->check_out);
         $nights   = $checkIn->diffInDays($checkOut);
 
+        if ($nights < 1) {
+            return response()->json([
+                'success' => false,
+                'message' => 'La durée du séjour doit être d\'au moins 1 nuit.',
+            ], 422);
+        }
+
         // Vérifier disponibilité
         $conflict = PropertyAvailability::where('property_id', $request->property_id)
             ->whereBetween('unavailable_date', [
@@ -61,11 +75,22 @@ class BookingController extends Controller
             ])->exists();
 
         if ($conflict) {
-            return response()->json(['success' => false, 'message' => 'Ces dates ne sont pas disponibles.'], 409);
+            return response()->json([
+                'success' => false,
+                'message' => 'Ces dates ne sont pas disponibles.',
+            ], 409);
         }
 
-        // Calcul montants (FIX: price pas price_per_night)
-        $baseAmount = round($property->price * $nights, 2);
+        // FIX: price peut être nul → protection avec null coalescing
+        $price = (float) ($property->price ?? 0);
+        if ($price <= 0) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Le prix de ce bien est invalide.',
+            ], 422);
+        }
+
+        $baseAmount = round($price * $nights, 2);
         $feesAmount = round($baseAmount * 0.05, 2);
         $total      = $baseAmount + $feesAmount;
 
@@ -76,15 +101,15 @@ class BookingController extends Controller
             'check_out'    => $request->check_out,
             'nights'       => $nights,
             'guests'       => $request->guests,
-            'base_amount'  => $baseAmount,    // FIX: base_amount
-            'fees_amount'  => $feesAmount,    // FIX: fees_amount
+            'base_amount'  => $baseAmount,
+            'fees_amount'  => $feesAmount,
             'total_amount' => $total,
-            'currency'     => $property->currency,
-            'status'       => 'en_attente',   // FIX: enum FR
+            'currency'     => $property->currency ?? 'XAF',
+            'status'       => 'en_attente',
             'notes'        => $request->notes,
         ]);
 
-        // Notification
+        // Notification client
         Notification::create([
             'user_id' => $request->user()->id,
             'title'   => 'Réservation créée 📅',
@@ -116,12 +141,15 @@ class BookingController extends Controller
             ->where('user_id', $request->user()->id)
             ->firstOrFail();
 
-        if (!in_array($booking->status, ['en_attente', 'confirmé'])) {  // FIX: enum FR
-            return response()->json(['success' => false, 'message' => 'Cette réservation ne peut pas être annulée.'], 422);
+        if (!in_array($booking->status, ['en_attente', 'confirmé'])) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Cette réservation ne peut pas être annulée.',
+            ], 422);
         }
 
         $booking->update([
-            'status'        => 'annulé',       // FIX: enum FR
+            'status'        => 'annulé',
             'cancel_reason' => $request->reason ?? 'Annulé par le client',
             'cancelled_at'  => now(),
         ]);
@@ -135,7 +163,7 @@ class BookingController extends Controller
             return response()->json(['success' => false, 'message' => 'Non autorisé.'], 403);
         }
 
-        Booking::where('reference', $ref)->firstOrFail()->update(['status' => 'confirmé']); // FIX
+        Booking::where('reference', $ref)->firstOrFail()->update(['status' => 'confirmé']);
 
         return response()->json(['success' => true, 'message' => 'Réservation confirmée.']);
     }
@@ -144,25 +172,26 @@ class BookingController extends Controller
     private function bookingResource(Booking $b): array
     {
         return [
-            'id'           => $b->id,
-            'reference'    => $b->reference,
-            'check_in'     => $b->check_in?->format('d/m/Y'),
-            'check_out'    => $b->check_out?->format('d/m/Y'),
-            'nights'       => $b->nights,
-            'guests'       => $b->guests,
-            'base_amount'  => (float) $b->base_amount,  // FIX
-            'fees_amount'  => (float) $b->fees_amount,  // FIX
-            'total_amount' => (float) $b->total_amount,
-            'currency'     => $b->currency,
-            'status'       => $b->status,
-            'notes'        => $b->notes,
-            'created_at'   => $b->created_at?->toISOString(),
+            'id'             => $b->id,
+            'reference'      => $b->reference,
+            'ref'            => $b->reference, // alias pour Flutter
+            'check_in'       => $b->check_in?->format('d/m/Y'),
+            'check_out'      => $b->check_out?->format('d/m/Y'),
+            'nights'         => $b->nights,
+            'guests'         => $b->guests,
+            'base_amount'    => (float) $b->base_amount,
+            'fees_amount'    => (float) $b->fees_amount,
+            'total_amount'   => (float) $b->total_amount,
+            'currency'       => $b->currency ?? 'XAF',
+            'status'         => $b->status,
+            'notes'          => $b->notes,
+            'created_at'     => $b->created_at?->toISOString(),
             'payment_status' => $b->payment?->status ?? 'non_payé',
-            'property'     => $b->property ? [
+            'property'       => $b->property ? [
                 'id'          => $b->property->id,
                 'title'       => $b->property->title,
                 'city'        => $b->property->city,
-                'image_url'   => $b->property->primaryImage?->url,  // FIX
+                'image_url'   => $b->property->primaryImage?->url,
                 'cover_image' => $b->property->primaryImage?->url,
             ] : null,
         ];
