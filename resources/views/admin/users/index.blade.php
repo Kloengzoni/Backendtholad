@@ -40,11 +40,8 @@
     <tr>
       <td>
         <div style="display:flex;align-items:center;gap:10px">
-          @if($user->avatar)
-            <img src="{{ Storage::url($user->avatar) }}" style="width:38px;height:38px;border-radius:10px;object-fit:cover">
-          @else
-            <div class="avatar">{{ strtoupper(substr($user->name,0,1)) }}</div>
-          @endif
+          <img src="{{ $user->avatar_url }}" style="width:38px;height:38px;border-radius:10px;object-fit:cover" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+          <div class="avatar" style="display:none">{{ strtoupper(substr($user->name,0,1)) }}</div>
           <div>
             <div style="font-weight:600">{{ $user->name }}</div>
             <div style="font-size:11px;color:var(--txt3)">{{ $user->email ?? '—' }}</div>
