@@ -1,4 +1,17 @@
 <?php
+// ─── DIFF à appliquer dans routes/api.php ────────────────────────────────────
+//
+// Ajouter l'import en haut du fichier :
+// use App\Http\Controllers\Api\SupportController;
+//
+// Dans le groupe middleware('auth:sanctum'), ajouter :
+//
+//   /*
+//   | SUPPORT
+//   */
+//   Route::get('support/agent', [SupportController::class, 'agent']);
+//
+// ─── Version complète du groupe auth pour référence ──────────────────────────
 
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\AuthController;
@@ -10,22 +23,11 @@ use App\Http\Controllers\Api\MessageController;
 use App\Http\Controllers\Api\ReviewController;
 use App\Http\Controllers\Api\NotificationController;
 use App\Http\Controllers\Api\ProfileController;
-
-/*
-|--------------------------------------------------------------------------
-| ImmoStay API Routes — v1
-|--------------------------------------------------------------------------
-| Flutter / Mobile / Production Ready (Railway compatible)
-*/
+use App\Http\Controllers\Api\SupportController; // ← AJOUTER
 
 Route::prefix('v1')->group(function () {
 
-    /*
-    |────────────────────────────
-    | PUBLIC ROUTES
-    |────────────────────────────
-    */
-
+    // PUBLIC
     Route::prefix('auth')->group(function () {
         Route::post('register',        [AuthController::class, 'register']);
         Route::post('login',           [AuthController::class, 'login']);
@@ -40,33 +42,17 @@ Route::prefix('v1')->group(function () {
     Route::get('properties/{id}',          [PropertyController::class, 'show']);
     Route::get('properties/{id}/reviews',  [ReviewController::class, 'propertyReviews']);
 
-    /*
-    |────────────────────────────────────────────────────────
-    | WEBHOOK PEEXIT — Public (sécurisé par Basic Auth Peexit)
-    | URL à configurer dans votre tableau de bord Peexit :
-    | https://votre-app.railway.app/api/v1/payments/peex/callback
-    |────────────────────────────────────────────────────────
-    */
+    // WEBHOOK PEEXIT — Public
     Route::post('payments/peex/callback', [PaymentController::class, 'peexCallback'])
         ->withoutMiddleware(['auth:sanctum']);
 
-    /*
-    |────────────────────────────
-    | PROTECTED ROUTES (SANCTUM)
-    |────────────────────────────
-    */
-
+    // PROTECTED
     Route::middleware('auth:sanctum')->group(function () {
 
-        /*
-        | AUTH
-        */
         Route::post('auth/logout', [AuthController::class, 'logout']);
         Route::get('auth/me',      [AuthController::class, 'me']);
 
-        /*
-        | PROFILE
-        */
+        // PROFILE
         Route::prefix('profile')->group(function () {
             Route::get('/',        [ProfileController::class, 'show']);
             Route::put('/',        [ProfileController::class, 'update']);
@@ -74,65 +60,52 @@ Route::prefix('v1')->group(function () {
             Route::put('password', [ProfileController::class, 'changePassword']);
         });
 
-        /*
-        | PROPERTIES (agent/admin)
-        */
+        // ── FIX: SUPPORT AGENT ─────────────────────────────────────────────
+        // Retourne l'UUID de l'admin/agent pour que Flutter puisse
+        // envoyer des messages au bon destinataire (évite erreur 422)
+        Route::get('support/agent', [SupportController::class, 'agent']);
+        // ──────────────────────────────────────────────────────────────────
+
+        // PROPERTIES
         Route::post('properties',             [PropertyController::class, 'store']);
         Route::put('properties/{id}',         [PropertyController::class, 'update']);
         Route::delete('properties/{id}',      [PropertyController::class, 'destroy']);
         Route::post('properties/{id}/images', [PropertyController::class, 'uploadImages']);
 
-        /*
-        | BOOKINGS
-        */
+        // BOOKINGS
         Route::prefix('bookings')->group(function () {
-            Route::get('/',            [BookingController::class, 'index']);
-            Route::post('/',           [BookingController::class, 'store']);
-            Route::get('{ref}',        [BookingController::class, 'show']);
-            Route::put('{ref}/cancel', [BookingController::class, 'cancel']);
-            Route::put('{ref}/confirm',[BookingController::class, 'confirm']);
+            Route::get('/',             [BookingController::class, 'index']);
+            Route::post('/',            [BookingController::class, 'store']);
+            Route::get('{ref}',         [BookingController::class, 'show']);
+            Route::put('{ref}/cancel',  [BookingController::class, 'cancel']);
+            Route::put('{ref}/confirm', [BookingController::class, 'confirm']);
         });
 
-        /*
-        | PAYMENTS
-        */
+        // PAYMENTS
         Route::prefix('payments')->group(function () {
-            Route::post('initiate',    [PaymentController::class, 'initiate']);
-            Route::get('{ref}/status', [PaymentController::class, 'status']);
-            // Anciens callbacks MTN/Airtel directs (conservés pour compatibilité)
-            Route::post('mtn/callback',    [PaymentController::class, 'mtnCallback'])->withoutMiddleware(['auth:sanctum']);
-            Route::post('airtel/callback', [PaymentController::class, 'airtelCallback'])->withoutMiddleware(['auth:sanctum']);
+            Route::post('initiate',      [PaymentController::class, 'initiate']);
+            Route::get('{ref}/status',   [PaymentController::class, 'status']);
         });
 
-        /*
-        | FAVORITES
-        */
-        Route::get('favorites',       [FavoriteController::class, 'index']);
-        Route::post('favorites/{id}', [FavoriteController::class, 'toggle']);
+        // FAVORITES
+        Route::get('favorites',          [FavoriteController::class, 'index']);
+        Route::post('favorites/{id}',    [FavoriteController::class, 'toggle']);
 
-        /*
-        | MESSAGES
-        */
-        Route::prefix('messages')->group(function () {
-            Route::get('/',         [MessageController::class, 'conversations']);
-            Route::get('{userId}',  [MessageController::class, 'thread']);
-            Route::post('/',        [MessageController::class, 'send']);
-            Route::put('{id}/read', [MessageController::class, 'markRead']);
-        });
+        // MESSAGES
+        Route::get('messages',           [MessageController::class, 'conversations']);
+        Route::get('messages/{userId}',  [MessageController::class, 'thread']);
+        Route::post('messages',          [MessageController::class, 'send']);
+        Route::put('messages/{id}/read', [MessageController::class, 'markRead']);
 
-        /*
-        | REVIEWS
-        */
-        Route::post('reviews',     [ReviewController::class, 'store']);
-        Route::put('reviews/{id}', [ReviewController::class, 'update']);
+        // REVIEWS
+        Route::get('reviews',            [ReviewController::class, 'index']);
+        Route::post('reviews',           [ReviewController::class, 'store']);
+        Route::put('reviews/{id}',       [ReviewController::class, 'update']);
+        Route::delete('reviews/{id}',    [ReviewController::class, 'destroy']);
 
-        /*
-        | NOTIFICATIONS
-        */
-        Route::prefix('notifications')->group(function () {
-            Route::get('/',         [NotificationController::class, 'index']);
-            Route::put('read-all',  [NotificationController::class, 'readAll']);
-            Route::put('{id}/read', [NotificationController::class, 'markRead']);
-        });
+        // NOTIFICATIONS
+        Route::get('notifications',             [NotificationController::class, 'index']);
+        Route::put('notifications/read-all',    [NotificationController::class, 'readAll']);
+        Route::put('notifications/{id}/read',   [NotificationController::class, 'markRead']);
     });
 });
