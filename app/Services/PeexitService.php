@@ -21,8 +21,16 @@ class PeexitService
 
     public function __construct()
     {
-        $this->baseUrl   = rtrim(config('services.peexit.base_url'), '/');
-        $this->secretKey = config('services.peexit.secret_key');
+        $this->baseUrl   = rtrim(config('services.peexit.base_url', 'https://dev-backend.peexit.com/api/v1'), '/');
+        $this->secretKey = config('services.peexit.secret_key', '');
+
+        // Protection : empêche un appel avec une clé vide → log clair dans Railway
+        if (empty($this->secretKey)) {
+            Log::critical('[Peexit] PEEX_SECRET_KEY non configurée dans les variables d\'environnement Railway.');
+            throw new \RuntimeException(
+                'PEEX_SECRET_KEY non configurée. Ajoutez-la dans les variables Railway.'
+            );
+        }
     }
 
     // ─── Headers communs ──────────────────────────────────────────────────
@@ -57,11 +65,17 @@ class PeexitService
             'track_id' => $data['track_id'],
             'amount'   => $data['amount'],
             'phone'    => $data['phone'],
+            'country'  => $data['country'] ?? 'N/A',
         ]);
 
         $response = Http::withHeaders($this->headers())
             ->timeout(30)
             ->post("{$this->baseUrl}/collection/request_payment", $data);
+
+        Log::info('[Peexit] Collection response', [
+            'http_status' => $response->status(),
+            'body'        => $response->body(),
+        ]);
 
         if ($response->failed()) {
             Log::error('[Peexit] Collection request failed', [
@@ -74,7 +88,7 @@ class PeexitService
         }
 
         $result = $response->json();
-        Log::info('[Peexit] Collection initiated', ['result' => $result]);
+        Log::info('[Peexit] Collection initiated successfully', ['result' => $result]);
 
         return $result;
     }
@@ -89,6 +103,8 @@ class PeexitService
      */
     public function getTransactionStatus(string $trackId): array
     {
+        Log::info('[Peexit] Checking transaction status', ['track_id' => $trackId]);
+
         $response = Http::withHeaders($this->headers())
             ->timeout(15)
             ->get("{$this->baseUrl}/collection/all_requests", [
@@ -108,15 +124,15 @@ class PeexitService
     }
 
     /**
-     * Convertir un statut Peexit en statut interne ImmoStay
+     * Convertir un statut Peexit en statut interne TholadImmo
      */
     public function mapStatus(string $peexStatus): string
     {
         return match ($peexStatus) {
-            'paid'               => 'succès',
-            'pending', 'new'     => 'en_attente',
-            'failed', 'canceled', 'rejected' => 'échoué',
-            default              => 'en_attente',
+            'paid'                               => 'succès',
+            'pending', 'new'                     => 'en_attente',
+            'failed', 'canceled', 'rejected'     => 'échoué',
+            default                              => 'en_attente',
         };
     }
 }
