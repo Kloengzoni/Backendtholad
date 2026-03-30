@@ -10,10 +10,23 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 
 /**
- * PaymentController — Intégration Peexit Collect API
+ * PaymentController
  *
- * FIX: Vérification que PeexitService est configuré AVANT de créer le paiement.
- *      Retourne un 503 clair si PEEX_SECRET_KEY manque, au lieu d'un crash 500.
+ * FIX BUG 3 :
+ *   "Erreur serveur" lors du paiement Carte/Virement.
+ *
+ *   Cause identifiée : quand l'utilisateur clique "Payer" une 2e fois
+ *   (après une tentative échouée ou un retour en arrière), un 2e paiement
+ *   `en_attente` est créé pour le même booking. Si un problème survient
+ *   (timeout, erreur réseau), le 3e clic crée un 3e paiement, etc.
+ *   À terme, une contrainte ou une logique métier plante → 500.
+ *
+ *   SOLUTION : avant de créer un paiement, vérifier s'il en existe déjà
+ *   un `en_attente` pour cette réservation → le réutiliser (ou le supprimer
+ *   et en créer un nouveau avec la bonne méthode).
+ *
+ *   FIX ADDITIONNEL : le booking.status est mis à 'confirmé' (avec accent)
+ *   ce qui correspond bien à l'enum de la migration.
  */
 class PaymentController extends Controller
 {
@@ -27,45 +40,77 @@ class PaymentController extends Controller
         $request->validate([
             'booking_ref' => 'required|string',
             'method'      => 'required|in:mtn_momo,airtel_money,orange_money,wave,carte,virement',
-            'phone'       => 'required_if:method,mtn_momo,airtel_money,orange_money,wave|string',
+            'phone'       => 'required_if:method,mtn_momo,airtel_money,orange_money,wave|nullable|string',
         ]);
 
         $mobileMoneyMethods = ['mtn_momo', 'airtel_money', 'orange_money', 'wave'];
+        $manualMethods      = ['carte', 'virement'];
 
-        // FIX: Vérifier la configuration AVANT de créer quoi que ce soit
+        // Vérifier la config Peexit pour mobile money
         if (in_array($request->method, $mobileMoneyMethods) && !$this->peex->isConfigured()) {
-            Log::critical('[PaymentController] PEEX_SECRET_KEY manquante — paiement mobile impossible');
+            Log::critical('[PaymentController] PEEX_SECRET_KEY manquante');
             return response()->json([
                 'success' => false,
-                'message' => 'Le paiement mobile est temporairement indisponible. Veuillez contacter le support.',
+                'message' => 'Le paiement mobile est temporairement indisponible.',
                 'code'    => 'PAYMENT_SERVICE_UNAVAILABLE',
             ], 503);
         }
 
-        // ── Récupérer la réservation ──────────────────────────────────────
+        // Récupérer la réservation
         $booking = Booking::where('reference', $request->booking_ref)
             ->where('user_id', $request->user()->id)
             ->firstOrFail();
 
-        if ($booking->payment?->isSuccess()) {
+        // Si déjà payée → rejeter
+        if ($booking->payment && $booking->payment->isSuccess()) {
             return response()->json([
                 'success' => false,
                 'message' => 'Cette réservation est déjà payée.',
             ], 409);
         }
 
-        // ── Créer l'enregistrement paiement ──────────────────────────────
-        $payment = Payment::create([
-            'booking_id' => $booking->id,
-            'user_id'    => $request->user()->id,
-            'method'     => $request->method,
-            'phone'      => $request->phone,
-            'amount'     => $booking->total_amount,
-            'currency'   => $booking->currency ?? 'XAF',
-            'status'     => 'en_attente',
-        ]);
+        // ── FIX BUG 3 : réutiliser ou supprimer le paiement en_attente ──
+        // Évite les doublons qui causent des 500 lors des re-tentatives
+        $existingPayment = Payment::where('booking_id', $booking->id)
+            ->where('status', 'en_attente')
+            ->latest()
+            ->first();
 
-        // ── Méthodes Mobile Money → appel Peexit ─────────────────────────
+        if ($existingPayment) {
+            if ($existingPayment->method === $request->method) {
+                // Même méthode → on réutilise directement
+                $payment = $existingPayment;
+                Log::info('[Payment] Réutilisation paiement existant', [
+                    'ref'    => $payment->reference,
+                    'method' => $payment->method,
+                ]);
+            } else {
+                // Méthode différente → supprimer l'ancien et en créer un nouveau
+                $existingPayment->delete();
+                $payment = null;
+                Log::info('[Payment] Ancien paiement supprimé (méthode changée)', [
+                    'old' => $existingPayment->method,
+                    'new' => $request->method,
+                ]);
+            }
+        } else {
+            $payment = null;
+        }
+
+        // Créer un nouveau paiement si nécessaire
+        if (!$payment) {
+            $payment = Payment::create([
+                'booking_id' => $booking->id,
+                'user_id'    => $request->user()->id,
+                'method'     => $request->method,
+                'phone'      => $request->phone ?: null,
+                'amount'     => $booking->total_amount,
+                'currency'   => $booking->currency ?? 'XAF',
+                'status'     => 'en_attente',
+            ]);
+        }
+
+        // ── Mobile Money → appel Peexit ──────────────────────────────────
         if (in_array($request->method, $mobileMoneyMethods)) {
             try {
                 $user    = $request->user();
@@ -83,9 +128,9 @@ class PaymentController extends Controller
                 ]);
 
                 $payment->update([
-                    'provider_ref'    => (string) ($peexResult['id'] ?? ''),
-                    'gateway_response'=> $peexResult,
-                    'status'          => $this->peex->mapStatus($peexResult['status'] ?? 'pending'),
+                    'provider_ref'     => (string) ($peexResult['id'] ?? ''),
+                    'gateway_response' => $peexResult,
+                    'status'           => $this->peex->mapStatus($peexResult['status'] ?? 'pending'),
                 ]);
 
             } catch (\Throwable $e) {
@@ -99,22 +144,28 @@ class PaymentController extends Controller
             }
         }
 
-        // ── Carte / Virement → confirmation immédiate ─────────────────────
-        // FIX: Peexit désactivé temporairement. Carte et Virement confirment
-        // la réservation immédiatement pour que le parcours client soit complet.
-        $manualMethods = ['carte', 'virement'];
+        // ── Carte / Virement → confirmation immédiate ────────────────────
+        // Peexit désactivé temporairement. On confirme directement.
         if (in_array($request->method, $manualMethods)) {
             $payment->update(['status' => 'succès', 'paid_at' => now()]);
             $booking->update(['status' => 'confirmé']);
-            Log::info('[Payment] Manuel confirmé', ['method' => $request->method, 'booking' => $booking->reference]);
+            Log::info('[Payment] Manuel confirmé', [
+                'method'  => $request->method,
+                'booking' => $booking->reference,
+                'payment' => $payment->reference,
+            ]);
         }
+
+        $payment->refresh();
 
         return response()->json([
             'success' => true,
-            'message' => 'Paiement initié. Validez sur votre téléphone.',
+            'message' => in_array($request->method, $manualMethods)
+                ? 'Paiement confirmé.'
+                : 'Paiement initié. Validez sur votre téléphone.',
             'data'    => [
                 'payment_reference' => $payment->reference,
-                'status'            => $payment->fresh()->status,
+                'status'            => $payment->status,
                 'amount'            => $payment->amount,
                 'currency'          => $payment->currency,
                 'method'            => $payment->method,
@@ -136,9 +187,9 @@ class PaymentController extends Controller
 
                 if ($newStatus !== $payment->status) {
                     $payment->update([
-                        'status'          => $newStatus,
-                        'gateway_response'=> $peexResult,
-                        'paid_at'         => $newStatus === 'succès' ? now() : null,
+                        'status'           => $newStatus,
+                        'gateway_response' => $peexResult,
+                        'paid_at'          => $newStatus === 'succès' ? now() : null,
                     ]);
 
                     if ($newStatus === 'succès') {
@@ -180,13 +231,10 @@ class PaymentController extends Controller
         $expectedPass = config('services.peexit.callback_password', 'peex_callback');
 
         if ($username !== $expectedUser || $password !== $expectedPass) {
-            Log::warning('[Peexit Callback] Unauthorized callback attempt');
             return response()->json(['error' => 'Unauthorized'], 401);
         }
 
-        $payload = $request->all();
-        Log::info('[Peexit Callback] Received', ['payload' => $payload]);
-
+        $payload      = $request->all();
         $transactions = isset($payload[0]) ? $payload : [$payload];
 
         foreach ($transactions as $tx) {
@@ -196,24 +244,17 @@ class PaymentController extends Controller
             if (!$trackId || !$peexStatus) continue;
 
             $payment = Payment::where('reference', $trackId)->first();
-            if (!$payment) {
-                Log::warning('[Peexit Callback] Payment not found', ['track_id' => $trackId]);
-                continue;
-            }
+            if (!$payment) continue;
 
             $newStatus = $this->peex->mapStatus($peexStatus);
             $payment->update([
-                'status'          => $newStatus,
-                'gateway_response'=> $tx,
-                'paid_at'         => $newStatus === 'succès' ? now() : null,
+                'status'           => $newStatus,
+                'gateway_response' => $tx,
+                'paid_at'          => $newStatus === 'succès' ? now() : null,
             ]);
 
             if ($newStatus === 'succès') {
                 $payment->booking?->update(['status' => 'confirmé']);
-                Log::info('[Peexit Callback] Booking confirmed', [
-                    'payment' => $trackId,
-                    'booking' => $payment->booking?->reference,
-                ]);
             }
         }
 
@@ -221,32 +262,29 @@ class PaymentController extends Controller
     }
 
     // ────────────────────────────────────────────────────────────────────────
-    //  Helpers privés
+    //  Helpers
     // ────────────────────────────────────────────────────────────────────────
-
     private function resolveCountryCode(string $country): string
     {
-        $map = [
-            'Congo Brazzaville'    => 'CG',
-            'Congo (Brazzaville)'  => 'CG',
-            'Congo RDC'            => 'CD',
-            'Gabon'                => 'GA',
-            'Cameroun'             => 'CM',
-            'Côte d\'Ivoire'       => 'CI',
-            'Sénégal'              => 'SN',
-            'Mali'                 => 'ML',
-            'Guinée'               => 'GN',
-            'Tchad'                => 'TD',
-            'Centrafrique'         => 'CF',
-            'Angola'               => 'AO',
-            'France'               => 'FR',
-            'Belgique'             => 'BE',
-            'Togo'                 => 'TG',
-            'Bénin'                => 'BJ',
-        ];
-
         if (preg_match('/^[A-Z]{2}$/', $country)) return $country;
-
+        $map = [
+            'Congo Brazzaville'   => 'CG',
+            'Congo (Brazzaville)' => 'CG',
+            'Congo RDC'           => 'CD',
+            'Gabon'               => 'GA',
+            'Cameroun'            => 'CM',
+            'Côte d\'Ivoire'      => 'CI',
+            'Sénégal'             => 'SN',
+            'Mali'                => 'ML',
+            'Guinée'              => 'GN',
+            'Tchad'               => 'TD',
+            'Centrafrique'        => 'CF',
+            'Angola'              => 'AO',
+            'France'              => 'FR',
+            'Belgique'            => 'BE',
+            'Togo'                => 'TG',
+            'Bénin'               => 'BJ',
+        ];
         return $map[$country] ?? 'CG';
     }
 
@@ -255,7 +293,6 @@ class PaymentController extends Controller
         if (str_starts_with($phone, '+')) {
             return preg_replace('/\s+/', '', $phone);
         }
-
         $dialCodes = [
             'CG' => '+242', 'CD' => '+243', 'GA' => '+241',
             'CM' => '+237', 'CI' => '+225', 'SN' => '+221',
@@ -263,14 +300,9 @@ class PaymentController extends Controller
             'CF' => '+236', 'AO' => '+244', 'FR' => '+33',
             'BE' => '+32',  'TG' => '+228', 'BJ' => '+229',
         ];
-
         $dialCode = $dialCodes[$countryCode] ?? '+242';
         $phone    = preg_replace('/\s+/', '', $phone);
-
-        if (str_starts_with($phone, '0')) {
-            $phone = substr($phone, 1);
-        }
-
+        if (str_starts_with($phone, '0')) $phone = substr($phone, 1);
         return $dialCode . $phone;
     }
 }

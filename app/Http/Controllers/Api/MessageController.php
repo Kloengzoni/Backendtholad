@@ -7,9 +7,26 @@ use App\Models\Message;
 use App\Models\Conversation;
 use App\Models\User;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 
+/**
+ * MessageController (API)
+ *
+ * FIX BUG 2b :
+ *   Quand une conversation est créée, last_message_at était NULL.
+ *   Le dashboard admin trie par last_message_at DESC → une conversation
+ *   avec last_message_at = NULL n'apparaissait pas ou apparaissait en dernier.
+ *
+ *   De plus, Message::$timestamps = false mais le model caste created_at.
+ *   La migration crée la colonne avec useCurrent() → la valeur est bien là
+ *   en base, mais $message->created_at peut être null juste après create()
+ *   car Eloquent ne recharge pas les colonnes DEFAULT. On fait un fresh().
+ */
 class MessageController extends Controller
 {
+    // ────────────────────────────────────────────────────────────────────────
+    //  GET /api/v1/messages  — liste des conversations du client
+    // ────────────────────────────────────────────────────────────────────────
     public function conversations(Request $request)
     {
         $userId = $request->user()->id;
@@ -25,16 +42,22 @@ class MessageController extends Controller
 
                 return [
                     'conversation_id' => $conv->id,
-                    'partner'         => ['id' => $partner?->id, 'name' => $partner?->name, 'avatar' => $partner?->avatar_url],
+                    'user_id'         => $partner?->id,
+                    'name'            => $partner?->name ?? 'Support',
                     'last_message'    => $conv->last_message,
-                    'last_message_at' => $conv->last_message_at,
-                    'unread_count'    => $unread,
+                    'time'            => $conv->last_message_at
+                        ? $conv->last_message_at->format('H:i')
+                        : '',
+                    'unread'          => $unread ?? 0,
                 ];
             });
 
         return response()->json(['success' => true, 'data' => $conversations]);
     }
 
+    // ────────────────────────────────────────────────────────────────────────
+    //  GET /api/v1/messages/{userId}  — fil de discussion
+    // ────────────────────────────────────────────────────────────────────────
     public function thread(Request $request, string $userId)
     {
         $me   = $request->user()->id;
@@ -44,7 +67,9 @@ class MessageController extends Controller
             $q->where('user1_id', $userId)->where('user2_id', $me);
         })->first();
 
-        if (!$conv) return response()->json(['success' => true, 'data' => []]);
+        if (!$conv) {
+            return response()->json(['success' => true, 'data' => []]);
+        }
 
         $messages = Message::where('conversation_id', $conv->id)
             ->with('sender:id,name,avatar')
@@ -59,7 +84,7 @@ class MessageController extends Controller
                 'created_at' => $m->created_at,
             ]);
 
-        // Marquer comme lu
+        // Marquer comme lu côté client
         if ($conv->user1_id === $me) {
             $conv->update(['user1_unread' => 0]);
         } else {
@@ -69,6 +94,9 @@ class MessageController extends Controller
         return response()->json(['success' => true, 'data' => $messages]);
     }
 
+    // ────────────────────────────────────────────────────────────────────────
+    //  POST /api/v1/messages  — envoyer un message
+    // ────────────────────────────────────────────────────────────────────────
     public function send(Request $request)
     {
         $request->validate([
@@ -79,6 +107,7 @@ class MessageController extends Controller
 
         $me         = $request->user()->id;
         $receiverId = $request->receiver_id;
+        $now        = now();
 
         // Trouver ou créer la conversation
         $conv = Conversation::where(function ($q) use ($me, $receiverId) {
@@ -88,10 +117,14 @@ class MessageController extends Controller
         })->first();
 
         if (!$conv) {
+            // FIX BUG 2b : toujours initialiser last_message_at à now()
+            // sinon la conversation n'apparaît pas dans le dashboard admin
             $conv = Conversation::create([
-                'user1_id'   => $me,
-                'user2_id'   => $receiverId,
-                'booking_id' => $request->booking_id,
+                'user1_id'        => $me,
+                'user2_id'        => $receiverId,
+                'booking_id'      => $request->booking_id,
+                'last_message'    => $request->content,
+                'last_message_at' => $now,   // ← FIX : ne pas laisser NULL
             ]);
         }
 
@@ -102,6 +135,11 @@ class MessageController extends Controller
             'type'            => 'text',
         ]);
 
+        // FIX BUG 2b : Message a timestamps=false + useCurrent() en migration
+        // → created_at peut être null en mémoire juste après create().
+        // On recharge depuis la DB pour avoir la vraie valeur.
+        $message->refresh();
+
         // Incrémenter unread pour le destinataire
         if ($conv->user1_id === $receiverId) {
             $conv->increment('user1_unread');
@@ -109,10 +147,11 @@ class MessageController extends Controller
             $conv->increment('user2_unread');
         }
 
-        $conv->update(['last_message' => $request->content, 'last_message_at' => now()]);
+        $conv->update([
+            'last_message'    => $request->content,
+            'last_message_at' => $now,
+        ]);
 
-        // FIX: retourner une ressource propre (même format que thread())
-        // Le modèle Message a $timestamps = false → utiliser now() pour created_at
         return response()->json([
             'success' => true,
             'data'    => [
@@ -121,11 +160,14 @@ class MessageController extends Controller
                 'type'       => $message->type,
                 'is_mine'    => true,
                 'is_read'    => false,
-                'created_at' => $message->created_at ?? now(),
+                'created_at' => $message->created_at ?? $now,
             ],
         ], 201);
     }
 
+    // ────────────────────────────────────────────────────────────────────────
+    //  PUT /api/v1/messages/{id}/read
+    // ────────────────────────────────────────────────────────────────────────
     public function markRead(Request $request, string $id)
     {
         Message::where('id', $id)->update(['is_read' => true, 'read_at' => now()]);

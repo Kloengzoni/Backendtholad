@@ -10,26 +10,29 @@ use Illuminate\Http\Request;
  * SupportController
  *
  * GET /api/v1/support/agent
- * → Retourne l'UUID et le nom du compte admin/support
- *   pour que l'app Flutter puisse envoyer des messages au bon destinataire.
  *
- * FIX: évite l'erreur 422 "receiver_id invalide" causée par la valeur
- *      en dur "support" dans ApiConstants.supportUserId (qui n'est pas un UUID).
+ * FIX BUG 2a :
+ *   L'ancien code faisait ->where('is_active', true).
+ *   Or la migration crée is_active DEFAULT false, et les admins existants
+ *   créés avant le dernier seeder peuvent avoir is_active = 0.
+ *   → Le endpoint retournait 503 → Flutter envoyait receiver_id = '' → 422.
+ *
+ *   SOLUTION : chercher par rôle seulement, sans filtrer is_active.
+ *   L'admin est toujours disponible même s'il n'est pas "connecté".
  */
 class SupportController extends Controller
 {
     public function agent(Request $request)
     {
-        // Trouver le premier compte admin actif
+        // FIX : plus de filtre ->where('is_active', true)
+        // On cherche par rôle uniquement, priorité admin > owner/agent
         $admin = User::where('role', 'admin')
-            ->where('is_active', true)
             ->orderBy('id')
             ->first();
 
         if (!$admin) {
-            // Fallback : chercher un owner/agent s'il n'y a pas d'admin
+            // Fallback : owner ou agent s'il n'y a pas d'admin
             $admin = User::whereIn('role', ['owner', 'agent'])
-                ->where('is_active', true)
                 ->orderBy('id')
                 ->first();
         }
@@ -41,12 +44,19 @@ class SupportController extends Controller
             ], 503);
         }
 
+        // Construire l'URL absolue de l'avatar si besoin
+        $avatarUrl = $admin->avatar;
+        if ($avatarUrl && !str_starts_with($avatarUrl, 'http')) {
+            $appUrl    = rtrim(config('app.url', 'https://backendtholad-production.up.railway.app'), '/');
+            $avatarUrl = $appUrl . '/storage/' . $avatarUrl;
+        }
+
         return response()->json([
             'success' => true,
-            'data' => [
+            'data'    => [
                 'id'     => $admin->id,
                 'name'   => $admin->name ?? 'TholadImmo Support',
-                'avatar' => $admin->avatar_url,
+                'avatar' => $avatarUrl,
             ],
         ]);
     }

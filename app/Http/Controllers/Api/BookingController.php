@@ -10,6 +10,17 @@ use App\Models\Notification;
 use Illuminate\Http\Request;
 use Carbon\Carbon;
 
+/**
+ * BookingController
+ *
+ * FIX BUG 3 (supplémentaire) :
+ *   La validation 'check_in' => 'after_or_equal:today' compare avec le
+ *   fuseau Railway (UTC). Le client en UTC+1 (Pointe-Noire) envoie une date
+ *   qui correspond à "hier" côté serveur → validation 422 mappée en 500 par Flutter.
+ *
+ *   SOLUTION : remplacer after_or_equal:today par une vérification manuelle
+ *   en acceptant check_in >= hier (tolérance 1 jour pour le décalage horaire).
+ */
 class BookingController extends Controller
 {
     public function index(Request $request)
@@ -28,9 +39,11 @@ class BookingController extends Controller
 
     public function store(Request $request)
     {
+        // FIX BUG 3 : retirer 'after_or_equal:today' — remplacé par contrôle
+        // manuel ci-dessous (tolérance 1 jour pour décalage UTC/UTC+1).
         $request->validate([
             'property_id' => 'required|exists:properties,id',
-            'check_in'    => 'required|date|after_or_equal:today',
+            'check_in'    => 'required|date',
             'check_out'   => 'required|date|after:check_in',
             'guests'      => 'required|integer|min:1',
             'notes'       => 'nullable|string|max:500',
@@ -57,6 +70,15 @@ class BookingController extends Controller
         $checkIn  = Carbon::parse($request->check_in);
         $checkOut = Carbon::parse($request->check_out);
         $nights   = $checkIn->diffInDays($checkOut);
+
+        // FIX : accepter check_in >= aujourd'hui - 1 jour (tolérance fuseau horaire)
+        $yesterday = Carbon::yesterday()->startOfDay();
+        if ($checkIn->lt($yesterday)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'La date d\'arrivée ne peut pas être dans le passé.',
+            ], 422);
+        }
 
         if ($nights < 1) {
             return response()->json([
@@ -170,14 +192,12 @@ class BookingController extends Controller
             'id'             => $b->id,
             'reference'      => $b->reference,
             'ref'            => $b->reference,
-            // FIX CRITIQUE : retourner en format ISO (yyyy-mm-dd)
-            // et non en "dd/mm/yyyy" qui crashe DateTime.parse() côté Flutter
             'check_in'       => $b->check_in?->format('Y-m-d'),
             'check_out'      => $b->check_out?->format('Y-m-d'),
             'nights'         => $b->nights,
             'guests'         => $b->guests,
             'base_amount'    => (float) $b->base_amount,
-            'fees_amount'    => (float) $b->fees_amount,   // FIX: fees_amount (pas services_fee)
+            'fees_amount'    => (float) $b->fees_amount,
             'total_amount'   => (float) $b->total_amount,
             'currency'       => $b->currency ?? 'XAF',
             'status'         => $b->status,
