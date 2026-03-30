@@ -1,4 +1,10 @@
 <?php
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║  FICHIER : app/Http/Controllers/Admin/MessageController.php              ║
+// ║  BUG CORRIGÉ : L'admin ne voyait pas les messages Flutter                ║
+// ║  CAUSE : l'admin utilisait SupportTickets, Flutter utilisait             ║
+// ║           conversations/messages → deux systèmes déconnectés             ║
+// ╚══════════════════════════════════════════════════════════════════════════╝
 
 namespace App\Http\Controllers\Admin;
 
@@ -8,121 +14,110 @@ use App\Models\Message;
 use App\Models\User;
 use Illuminate\Http\Request;
 
-/**
- * Admin\MessageController
- *
- * Gère les conversations côté admin panel (web).
- * Permet à l'admin de voir et répondre aux messages des clients Flutter.
- *
- * Routes à ajouter dans routes/admin.php :
- *   Route::get('messages', [MessageController::class, 'index'])->name('admin.messages.index');
- *   Route::get('messages/{id}', [MessageController::class, 'show'])->name('admin.messages.show');
- *   Route::post('messages/{id}/reply', [MessageController::class, 'reply'])->name('admin.messages.reply');
- */
 class MessageController extends Controller
 {
-    public function index(Request $request)
+    // ─────────────────────────────────────────────────────────────────────────
+    //  GET /admin/messages
+    //  Liste toutes les conversations triées par dernier message reçu
+    // ─────────────────────────────────────────────────────────────────────────
+    public function index()
     {
-        // Récupérer toutes les conversations, triées par dernier message
-        $conversations = Conversation::with(['user1', 'user2'])
+        $conversations = Conversation::with(['user1', 'user2', 'property'])
             ->orderByDesc('last_message_at')
             ->paginate(30);
 
         return view('admin.messages.index', compact('conversations'));
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    //  GET /admin/messages/{id}
+    //  Affiche le fil de messages d'une conversation + marque comme lus
+    // ─────────────────────────────────────────────────────────────────────────
     public function show(string $id)
     {
-        $activeConv = Conversation::with(['user1', 'user2'])->findOrFail($id);
+        $activeConv = Conversation::with(['user1', 'user2', 'property'])
+            ->findOrFail($id);
 
-        // Récupérer tous les messages de cette conversation
-        $messages = Message::where('conversation_id', $id)
+        $messages = Message::where('conversation_id', $activeConv->id)
             ->with('sender:id,name,role,avatar')
             ->orderBy('created_at')
             ->get();
 
-        // Marquer les messages du client comme lus
-        $adminUser = $this->getAdminUser($activeConv);
-        if ($adminUser) {
-            // Réinitialiser le compteur unread côté admin
-            if ($activeConv->user1_id === $adminUser->id) {
+        // Marquer les messages du client comme lus (côté admin)
+        // Le compte support (role=admin dans users) est user2 dans les convs créées par les clients
+        $supportUser = User::where('role', 'admin')->orderBy('id')->first();
+        if ($supportUser) {
+            if ($activeConv->user1_id === $supportUser->id) {
                 $activeConv->update(['user1_unread' => 0]);
-            } else {
+            } elseif ($activeConv->user2_id === $supportUser->id) {
                 $activeConv->update(['user2_unread' => 0]);
             }
-            // Marquer les messages non lus envoyés au admin comme lus
-            Message::where('conversation_id', $id)
-                ->where('sender_id', '!=', $adminUser->id)
+            // Marquer les messages non lus comme lus en base
+            Message::where('conversation_id', $activeConv->id)
+                ->where('sender_id', '!=', $supportUser->id)
                 ->where('is_read', false)
                 ->update(['is_read' => true, 'read_at' => now()]);
         }
 
-        // Toutes les conversations pour la sidebar
-        $conversations = Conversation::with(['user1', 'user2'])
+        // Recharger la liste sidebar
+        $conversations = Conversation::with(['user1', 'user2', 'property'])
             ->orderByDesc('last_message_at')
             ->paginate(30);
 
         return view('admin.messages.index', compact('conversations', 'activeConv', 'messages'));
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    //  POST /admin/messages/{id}/reply
+    //  L'admin envoie un message → visible immédiatement dans l'app Flutter
+    //  grâce au polling toutes les 5s dans chat_screen.dart
+    // ─────────────────────────────────────────────────────────────────────────
     public function reply(Request $request, string $id)
     {
-        $request->validate(['content' => 'required|string|max:2000']);
+        $request->validate([
+            'content' => 'required|string|max:2000',
+        ]);
 
         $conv = Conversation::findOrFail($id);
 
-        // Identifier le compte admin dans cette conversation
-        $adminUser = $this->getAdminUser($conv);
+        // Retrouver le user "support" dans la table users (role=admin)
+        // C'est ce compte que Flutter utilise via GET /api/v1/support/agent
+        $supportUser = User::where('role', 'admin')->orderBy('id')->first();
 
-        if (!$adminUser) {
-            // Fallback : utiliser le premier admin du système
-            $adminUser = User::where('role', 'admin')->first();
+        if (!$supportUser) {
+            return back()->withErrors([
+                'error' => 'Aucun compte support (role=admin) trouvé dans la table users. '
+                         . 'Exécutez : php artisan db:seed --class=SupportUserSeeder',
+            ]);
         }
 
-        if (!$adminUser) {
-            return back()->with('error', 'Compte admin introuvable.');
-        }
+        $now = now();
 
-        // Identifier le destinataire (le client)
-        $clientId = $conv->user1_id === $adminUser->id
-            ? $conv->user2_id
-            : $conv->user1_id;
-
-        // Créer le message
+        // Créer le message admin dans la conversation
         Message::create([
             'conversation_id' => $conv->id,
-            'sender_id'       => $adminUser->id,
+            'sender_id'       => $supportUser->id,
             'content'         => $request->content,
             'type'            => 'text',
         ]);
 
-        // Incrémenter unread pour le client
-        if ($conv->user1_id === $clientId) {
+        // Incrémenter les non-lus côté CLIENT (pas côté admin)
+        if ($conv->user2_id === $supportUser->id) {
+            // Support est user2 → incrémenter user1_unread (= le client)
             $conv->increment('user1_unread');
         } else {
+            // Support est user1 ou n'est pas dans la conv → incrémenter user2_unread
             $conv->increment('user2_unread');
         }
 
+        // Mettre à jour le résumé de la conversation
         $conv->update([
             'last_message'    => $request->content,
-            'last_message_at' => now(),
+            'last_message_at' => $now,
         ]);
 
-        return redirect()->route('admin.messages.show', $id)
-            ->with('success', 'Message envoyé.');
-    }
-
-    /**
-     * Retourne l'utilisateur admin dans la conversation.
-     */
-    private function getAdminUser(Conversation $conv): ?User
-    {
-        if ($conv->user1 && $conv->user1->role === 'admin') {
-            return $conv->user1;
-        }
-        if ($conv->user2 && $conv->user2->role === 'admin') {
-            return $conv->user2;
-        }
-        return null;
+        return redirect()
+            ->route('admin.messages.show', $conv->id)
+            ->with('success', 'Message envoyé. Le client le recevra dans les 5 secondes (polling Flutter).');
     }
 }
