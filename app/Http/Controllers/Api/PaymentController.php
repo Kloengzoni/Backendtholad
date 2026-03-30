@@ -12,11 +12,8 @@ use Illuminate\Support\Facades\Log;
 /**
  * PaymentController — Intégration Peexit Collect API
  *
- * Flux :
- *   1. App Flutter → POST /api/v1/payments/initiate  (initier le paiement)
- *   2. Peexit envoie une demande USSD au téléphone du client
- *   3. Peexit → POST /api/v1/payments/peex/callback  (webhook confirmation)
- *   4. App Flutter → GET  /api/v1/payments/{ref}/status (polling ou après callback)
+ * FIX: Vérification que PeexitService est configuré AVANT de créer le paiement.
+ *      Retourne un 503 clair si PEEX_SECRET_KEY manque, au lieu d'un crash 500.
  */
 class PaymentController extends Controller
 {
@@ -32,6 +29,18 @@ class PaymentController extends Controller
             'method'      => 'required|in:mtn_momo,airtel_money,orange_money,wave,carte,virement',
             'phone'       => 'required_if:method,mtn_momo,airtel_money,orange_money,wave|string',
         ]);
+
+        $mobileMoneyMethods = ['mtn_momo', 'airtel_money', 'orange_money', 'wave'];
+
+        // FIX: Vérifier la configuration AVANT de créer quoi que ce soit
+        if (in_array($request->method, $mobileMoneyMethods) && !$this->peex->isConfigured()) {
+            Log::critical('[PaymentController] PEEX_SECRET_KEY manquante — paiement mobile impossible');
+            return response()->json([
+                'success' => false,
+                'message' => 'Le paiement mobile est temporairement indisponible. Veuillez contacter le support.',
+                'code'    => 'PAYMENT_SERVICE_UNAVAILABLE',
+            ], 503);
+        }
 
         // ── Récupérer la réservation ──────────────────────────────────────
         $booking = Booking::where('reference', $request->booking_ref)
@@ -57,18 +66,14 @@ class PaymentController extends Controller
         ]);
 
         // ── Méthodes Mobile Money → appel Peexit ─────────────────────────
-        $mobileMoneyMethods = ['mtn_momo', 'airtel_money', 'orange_money', 'wave'];
-
         if (in_array($request->method, $mobileMoneyMethods)) {
             try {
                 $user    = $request->user();
                 $country = $this->resolveCountryCode($user->country ?? 'Congo (Brazzaville)');
-
-                // Formater le téléphone en international (+242...)
-                $phone = $this->formatPhone($request->phone, $country);
+                $phone   = $this->formatPhone($request->phone, $country);
 
                 $peexResult = $this->peex->requestCollection([
-                    'track_id'      => $payment->reference,       // notre ref unique
+                    'track_id'      => $payment->reference,
                     'phone'         => $phone,
                     'amount'        => (float) $booking->total_amount,
                     'currency'      => $booking->currency ?? 'XAF',
@@ -77,7 +82,6 @@ class PaymentController extends Controller
                     'description'   => "Réservation ImmoStay #{$booking->reference}",
                 ]);
 
-                // Sauvegarder la réponse Peexit
                 $payment->update([
                     'provider_ref'    => (string) ($peexResult['id'] ?? ''),
                     'gateway_response'=> $peexResult,
@@ -90,12 +94,11 @@ class PaymentController extends Controller
 
                 return response()->json([
                     'success' => false,
-                    'message' => 'Erreur lors de l\'initiation du paiement mobile : ' . $e->getMessage(),
+                    'message' => 'Erreur lors de l\'initiation du paiement : ' . $e->getMessage(),
                 ], 500);
             }
         }
 
-        // ── Autres méthodes (carte, virement) → en attente manuelle ──────
         return response()->json([
             'success' => true,
             'message' => 'Paiement initié. Validez sur votre téléphone.',
@@ -110,14 +113,13 @@ class PaymentController extends Controller
     }
 
     // ────────────────────────────────────────────────────────────────────────
-    //  GET /api/v1/payments/{ref}/status   (polling depuis l'app Flutter)
+    //  GET /api/v1/payments/{ref}/status
     // ────────────────────────────────────────────────────────────────────────
     public function status(string $ref)
     {
         $payment = Payment::where('reference', $ref)->firstOrFail();
 
-        // Si toujours en attente, rafraîchir depuis Peexit
-        if ($payment->isPending() && $payment->provider_ref) {
+        if ($payment->isPending() && $payment->provider_ref && $this->peex->isConfigured()) {
             try {
                 $peexResult = $this->peex->getTransactionStatus($payment->reference);
                 $newStatus  = $this->peex->mapStatus($peexResult['status'] ?? 'pending');
@@ -129,7 +131,6 @@ class PaymentController extends Controller
                         'paid_at'         => $newStatus === 'succès' ? now() : null,
                     ]);
 
-                    // Confirmer la réservation si paiement réussi
                     if ($newStatus === 'succès') {
                         $payment->booking?->update(['status' => 'confirmé']);
                     }
@@ -158,12 +159,10 @@ class PaymentController extends Controller
     }
 
     // ────────────────────────────────────────────────────────────────────────
-    //  POST /api/v1/payments/peex/callback   (Webhook Peexit → votre serveur)
-    //  Sécurisé par Basic Auth : username=peex, password=peex_callback (sandbox)
+    //  POST /api/v1/payments/peex/callback
     // ────────────────────────────────────────────────────────────────────────
     public function peexCallback(Request $request)
     {
-        // Vérification Basic Auth Peexit
         $username = $request->getUser();
         $password = $request->getPassword();
 
@@ -178,16 +177,13 @@ class PaymentController extends Controller
         $payload = $request->all();
         Log::info('[Peexit Callback] Received', ['payload' => $payload]);
 
-        // Le callback peut être un tableau ou un objet unique
         $transactions = isset($payload[0]) ? $payload : [$payload];
 
         foreach ($transactions as $tx) {
-            $trackId   = $tx['track_id'] ?? null;
+            $trackId    = $tx['track_id'] ?? null;
             $peexStatus = $tx['status']   ?? null;
 
-            if (!$trackId || !$peexStatus) {
-                continue;
-            }
+            if (!$trackId || !$peexStatus) continue;
 
             $payment = Payment::where('reference', $trackId)->first();
             if (!$payment) {
@@ -196,24 +192,18 @@ class PaymentController extends Controller
             }
 
             $newStatus = $this->peex->mapStatus($peexStatus);
-
             $payment->update([
                 'status'          => $newStatus,
                 'gateway_response'=> $tx,
                 'paid_at'         => $newStatus === 'succès' ? now() : null,
             ]);
 
-            // Confirmer la réservation si paiement réussi
             if ($newStatus === 'succès') {
                 $payment->booking?->update(['status' => 'confirmé']);
                 Log::info('[Peexit Callback] Booking confirmed', [
-                    'payment'  => $trackId,
-                    'booking'  => $payment->booking?->reference,
+                    'payment' => $trackId,
+                    'booking' => $payment->booking?->reference,
                 ]);
-            }
-
-            if ($newStatus === 'échoué') {
-                Log::warning('[Peexit Callback] Payment failed', ['track_id' => $trackId]);
             }
         }
 
@@ -224,9 +214,6 @@ class PaymentController extends Controller
     //  Helpers privés
     // ────────────────────────────────────────────────────────────────────────
 
-    /**
-     * Convertir un pays en code ISO2
-     */
     private function resolveCountryCode(string $country): string
     {
         $map = [
@@ -248,25 +235,17 @@ class PaymentController extends Controller
             'Bénin'                => 'BJ',
         ];
 
-        // Si déjà un code ISO2 (2 lettres majuscules)
-        if (preg_match('/^[A-Z]{2}$/', $country)) {
-            return $country;
-        }
+        if (preg_match('/^[A-Z]{2}$/', $country)) return $country;
 
         return $map[$country] ?? 'CG';
     }
 
-    /**
-     * Formater le numéro de téléphone au format international Peexit (+242XXXXXXX)
-     */
     private function formatPhone(string $phone, string $countryCode): string
     {
-        // Déjà au bon format
         if (str_starts_with($phone, '+')) {
             return preg_replace('/\s+/', '', $phone);
         }
 
-        // Indicatifs par pays
         $dialCodes = [
             'CG' => '+242', 'CD' => '+243', 'GA' => '+241',
             'CM' => '+237', 'CI' => '+225', 'SN' => '+221',
@@ -278,7 +257,6 @@ class PaymentController extends Controller
         $dialCode = $dialCodes[$countryCode] ?? '+242';
         $phone    = preg_replace('/\s+/', '', $phone);
 
-        // Supprimer le 0 local si présent en début
         if (str_starts_with($phone, '0')) {
             $phone = substr($phone, 1);
         }

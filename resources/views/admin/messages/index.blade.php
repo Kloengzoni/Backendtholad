@@ -1,150 +1,194 @@
 {{-- resources/views/admin/messages/index.blade.php --}}
-{{-- Vue conversations côté admin — permet de voir et répondre aux messages clients --}}
+{{-- Affiche les conversations Flutter (Conversation/Message) côté admin --}}
 @extends('admin.layouts.app')
-@section('title', 'Conversations')
+
+@section('title', 'Messages clients')
+
 @section('content')
+<div class="flex h-[calc(100vh-64px)] overflow-hidden">
 
-<div style="display:flex;gap:0;height:calc(100vh - 130px);background:var(--white);border-radius:16px;border:1px solid var(--border);overflow:hidden">
+    {{-- ── Sidebar : liste des conversations ─────────────────────────── --}}
+    <div class="w-80 border-r border-gray-200 flex flex-col bg-white">
+        <div class="p-4 border-b border-gray-200">
+            <h2 class="text-lg font-semibold text-gray-800">Conversations</h2>
+            <p class="text-xs text-gray-500 mt-1">Messages depuis l'application mobile</p>
+        </div>
 
-  {{-- ── Colonne liste conversations ──────────────────────────────────── --}}
-  <div id="conv-list" style="width:320px;min-width:280px;border-right:1px solid var(--border);overflow-y:auto;flex-shrink:0">
-    <div style="padding:16px 20px;border-bottom:1px solid var(--border);font-weight:700;font-size:15px;background:var(--bg)">
-      💬 Conversations ({{ $conversations->count() }})
+        <div class="overflow-y-auto flex-1">
+            @forelse($conversations as $conv)
+                @php
+                    $client = $conv->user1?->role !== 'admin' ? $conv->user1 : $conv->user2;
+                    $isActive = isset($activeConv) && $activeConv->id === $conv->id;
+                    $unread = ($conv->user1?->role === 'admin') ? $conv->user2_unread : $conv->user1_unread;
+                @endphp
+                <a href="{{ route('admin.messages.show', $conv->id) }}"
+                   class="flex items-center gap-3 px-4 py-3 border-b border-gray-100 hover:bg-gray-50 transition
+                          {{ $isActive ? 'bg-blue-50 border-l-4 border-l-blue-500' : '' }}">
+
+                    {{-- Avatar initiales --}}
+                    <div class="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                        <span class="text-blue-600 font-bold text-sm">
+                            {{ strtoupper(substr($client?->name ?? '?', 0, 1)) }}
+                        </span>
+                    </div>
+
+                    <div class="flex-1 min-w-0">
+                        <div class="flex justify-between items-center">
+                            <span class="text-sm font-medium text-gray-800 truncate">
+                                {{ $client?->name ?? 'Client inconnu' }}
+                            </span>
+                            @if($conv->last_message_at)
+                                <span class="text-xs text-gray-400 flex-shrink-0 ml-1">
+                                    {{ $conv->last_message_at->diffForHumans(null, true) }}
+                                </span>
+                            @endif
+                        </div>
+                        <div class="flex justify-between items-center mt-0.5">
+                            <p class="text-xs text-gray-500 truncate">
+                                {{ Str::limit($conv->last_message ?? 'Aucun message', 40) }}
+                            </p>
+                            @if($unread > 0)
+                                <span class="ml-1 flex-shrink-0 bg-blue-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+                                    {{ $unread }}
+                                </span>
+                            @endif
+                        </div>
+                        @if($conv->property)
+                            <p class="text-xs text-blue-400 truncate mt-0.5">
+                                📍 {{ Str::limit($conv->property->title ?? '', 30) }}
+                            </p>
+                        @endif
+                    </div>
+                </a>
+            @empty
+                <div class="p-8 text-center text-gray-400">
+                    <p class="text-3xl mb-2">💬</p>
+                    <p class="text-sm">Aucune conversation</p>
+                </div>
+            @endforelse
+        </div>
+
+        {{-- Pagination sidebar --}}
+        @if($conversations->hasPages())
+            <div class="p-3 border-t border-gray-200 text-xs text-gray-500 text-center">
+                {{ $conversations->links() }}
+            </div>
+        @endif
     </div>
 
-    @forelse($conversations as $conv)
-      @php
-        $me = auth()->guard('admin')->user();
-        $partner = null;
-        // Le partenaire est l'utilisateur non-admin
-        if ($conv->user1 && $conv->user1->role !== 'admin') {
-            $partner = $conv->user1;
-            $unread  = $conv->user2_unread ?? 0;
-        } else {
-            $partner = $conv->user2;
-            $unread  = $conv->user1_unread ?? 0;
-        }
-        $initial = strtoupper(substr($partner->name ?? 'U', 0, 1));
-      @endphp
-      <a href="{{ route('admin.messages.show', $conv->id) }}"
-         style="display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--border);text-decoration:none;color:inherit;
-                {{ request()->route('id') == $conv->id ? 'background:var(--bg);border-left:3px solid var(--blue)' : 'border-left:3px solid transparent' }};
-                transition:background .15s"
-         onmouseover="this.style.background='var(--bg)'"
-         onmouseout="this.style.background='{{ request()->route('id') == $conv->id ? 'var(--bg)' : '' }}'">
-        <div class="avatar" style="width:42px;height:42px;font-size:15px;flex-shrink:0">{{ $initial }}</div>
-        <div style="flex:1;min-width:0">
-          <div style="display:flex;justify-content:space-between;align-items:center">
-            <span style="font-weight:700;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ $partner->name ?? '—' }}</span>
-            <span style="font-size:10px;color:var(--txt3);white-space:nowrap;margin-left:8px">{{ $conv->last_message_at ? $conv->last_message_at->diffForHumans(null, true) : '' }}</span>
-          </div>
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:2px">
-            <span style="font-size:12px;color:var(--txt3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:180px">
-              {{ Str::limit($conv->last_message ?? 'Pas de message', 40) }}
-            </span>
-            @if($unread > 0)
-              <span style="background:var(--blue);color:#fff;border-radius:10px;padding:2px 7px;font-size:10px;font-weight:700;margin-left:6px;flex-shrink:0">{{ $unread }}</span>
-            @endif
-          </div>
-          <div style="font-size:10px;color:var(--txt3);margin-top:2px">{{ $partner->phone ?? $partner->email ?? '' }}</div>
-        </div>
-      </a>
-    @empty
-      <div style="padding:40px;text-align:center;color:var(--txt3)">
-        💬 Aucune conversation pour le moment
-      </div>
-    @endforelse
-  </div>
+    {{-- ── Zone principale : conversation sélectionnée ──────────────── --}}
+    <div class="flex-1 flex flex-col bg-gray-50">
 
-  {{-- ── Zone principale (message ou placeholder) ──────────────────────── --}}
-  <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+        @if(isset($activeConv))
+            @php
+                $client = $activeConv->user1?->role !== 'admin' ? $activeConv->user1 : $activeConv->user2;
+            @endphp
 
-    @if(isset($activeConv))
-      @php
-        $partner2 = null;
-        if ($activeConv->user1 && $activeConv->user1->role !== 'admin') {
-            $partner2 = $activeConv->user1;
-        } else {
-            $partner2 = $activeConv->user2;
-        }
-        $adminUser = $activeConv->user1->role === 'admin' ? $activeConv->user1 : $activeConv->user2;
-      @endphp
-
-      {{-- Header conversation --}}
-      <div style="padding:14px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;background:var(--white)">
-        <div class="avatar" style="width:40px;height:40px">{{ strtoupper(substr($partner2->name ?? 'U', 0, 1)) }}</div>
-        <div>
-          <div style="font-weight:700;font-size:14px">{{ $partner2->name ?? '—' }}</div>
-          <div style="font-size:12px;color:var(--txt3)">{{ $partner2->phone ?? '' }} • {{ $partner2->email ?? '' }}</div>
-        </div>
-        <div style="margin-left:auto;font-size:12px;color:var(--txt3)">
-          Conversation #{{ $activeConv->id }}
-        </div>
-      </div>
-
-      {{-- Messages --}}
-      <div id="msg-area" style="flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:10px;background:var(--bg)">
-        @forelse($messages as $msg)
-          @php
-            $isMine = $msg->sender_id === ($adminUser->id ?? null);
-          @endphp
-          <div style="display:flex;justify-content:{{ $isMine ? 'flex-end' : 'flex-start' }}">
-            <div style="max-width:65%;padding:10px 14px;border-radius:{{ $isMine ? '18px 18px 4px 18px' : '18px 18px 18px 4px' }};
-                        background:{{ $isMine ? 'var(--navy2)' : 'var(--white)' }};
-                        color:{{ $isMine ? '#fff' : 'var(--txt1)' }};
-                        box-shadow:0 2px 8px rgba(0,0,0,.08);font-size:13px;line-height:1.5">
-              {{ $msg->content }}
-              <div style="font-size:10px;color:{{ $isMine ? 'rgba(255,255,255,.6)' : 'var(--txt3)' }};margin-top:4px;text-align:right">
-                {{ $msg->created_at?->format('H:i') }}
-                @if($isMine)
-                  • {{ $msg->is_read ? '✓✓' : '✓' }}
+            {{-- Header conversation --}}
+            <div class="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center">
+                        <span class="text-blue-600 font-bold">
+                            {{ strtoupper(substr($client?->name ?? '?', 0, 1)) }}
+                        </span>
+                    </div>
+                    <div>
+                        <p class="font-semibold text-gray-800">{{ $client?->name ?? 'Client inconnu' }}</p>
+                        <p class="text-xs text-gray-500">{{ $client?->email }} · {{ $client?->phone }}</p>
+                    </div>
+                </div>
+                @if($activeConv->property)
+                    <div class="text-right">
+                        <p class="text-xs text-gray-400">Propriété</p>
+                        <p class="text-sm font-medium text-blue-600">
+                            {{ Str::limit($activeConv->property->title ?? '', 40) }}
+                        </p>
+                    </div>
                 @endif
-              </div>
             </div>
-          </div>
-        @empty
-          <div style="text-align:center;color:var(--txt3);padding:40px">Aucun message dans cette conversation.</div>
-        @endforelse
-      </div>
 
-      {{-- Zone de saisie --}}
-      <div style="padding:16px 20px;border-top:1px solid var(--border);background:var(--white)">
-        <form action="{{ route('admin.messages.reply', $activeConv->id) }}" method="POST"
-              style="display:flex;gap:10px;align-items:flex-end">
-          @csrf
-          <textarea name="content" rows="2" placeholder="Répondre à {{ $partner2->name ?? 'ce client' }}..."
-            style="flex:1;border:1px solid var(--border);border-radius:12px;padding:10px 14px;font-size:13px;font-family:inherit;resize:none;outline:none;transition:border .2s"
-            onfocus="this.style.borderColor='var(--blue)'"
-            onblur="this.style.borderColor='var(--border)'"
-            required></textarea>
-          <button type="submit" class="btn btn-gold" style="padding:10px 20px;height:fit-content">
-            <i class="fas fa-paper-plane"></i> Envoyer
-          </button>
-        </form>
-      </div>
+            {{-- Messages --}}
+            <div class="flex-1 overflow-y-auto p-6 space-y-3" id="messages-container">
+                @forelse($messages as $msg)
+                    @php
+                        $isSentByAdmin = $msg->sender?->role === 'admin';
+                    @endphp
+                    <div class="flex {{ $isSentByAdmin ? 'justify-end' : 'justify-start' }}">
+                        <div class="max-w-md">
+                            @if(!$isSentByAdmin)
+                                <p class="text-xs text-gray-400 mb-1 ml-1">
+                                    {{ $msg->sender?->name ?? 'Client' }}
+                                </p>
+                            @endif
+                            <div class="px-4 py-2.5 rounded-2xl text-sm leading-relaxed
+                                        {{ $isSentByAdmin
+                                            ? 'bg-blue-500 text-white rounded-tr-sm'
+                                            : 'bg-white text-gray-800 shadow-sm rounded-tl-sm' }}">
+                                {{ $msg->content }}
+                            </div>
+                            <p class="text-xs text-gray-400 mt-1 {{ $isSentByAdmin ? 'text-right mr-1' : 'ml-1' }}">
+                                {{ optional($msg->created_at)->format('H:i') }}
+                                @if($isSentByAdmin && $msg->is_read)
+                                    · <span class="text-blue-400">Lu</span>
+                                @endif
+                            </p>
+                        </div>
+                    </div>
+                @empty
+                    <div class="text-center text-gray-400 py-12">
+                        <p class="text-3xl mb-2">💬</p>
+                        <p>Aucun message dans cette conversation</p>
+                    </div>
+                @endforelse
+            </div>
 
-    @else
-      {{-- Placeholder aucune conv sélectionnée --}}
-      <div style="flex:1;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;color:var(--txt3)">
-        <i class="fas fa-comments" style="font-size:48px;opacity:.3"></i>
-        <p style="font-size:15px;font-weight:600">Sélectionnez une conversation</p>
-        <p style="font-size:13px">Cliquez sur une conversation à gauche pour voir les messages.</p>
-      </div>
-    @endif
+            {{-- Zone de réponse --}}
+            <div class="bg-white border-t border-gray-200 px-6 py-4">
+                @if(session('success'))
+                    <div class="mb-3 text-sm text-green-600 bg-green-50 rounded-lg px-3 py-2">
+                        ✓ {{ session('success') }}
+                    </div>
+                @endif
+                <form action="{{ route('admin.messages.reply', $activeConv->id) }}" method="POST"
+                      class="flex gap-3 items-end">
+                    @csrf
+                    <textarea name="content" rows="2" required
+                        placeholder="Écrire un message..."
+                        class="flex-1 border border-gray-300 rounded-xl px-4 py-2.5 text-sm resize-none
+                               focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">{{ old('content') }}</textarea>
+                    <button type="submit"
+                        class="bg-blue-500 hover:bg-blue-600 text-white rounded-xl px-5 py-2.5 text-sm font-medium
+                               transition-colors flex items-center gap-2 flex-shrink-0">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 rotate-45" fill="none"
+                             viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                  d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
+                        </svg>
+                        Envoyer
+                    </button>
+                </form>
+            </div>
 
-  </div>
+        @else
+            {{-- Aucune conversation sélectionnée --}}
+            <div class="flex-1 flex items-center justify-center">
+                <div class="text-center text-gray-400">
+                    <p class="text-6xl mb-4">💬</p>
+                    <p class="text-xl font-medium text-gray-600">Sélectionnez une conversation</p>
+                    <p class="text-sm mt-2">Choisissez une conversation dans la liste à gauche</p>
+                </div>
+            </div>
+        @endif
+    </div>
 </div>
 
+{{-- Auto-scroll vers le bas des messages --}}
+@push('scripts')
 <script>
-  // Auto-scroll vers le bas des messages
-  document.addEventListener('DOMContentLoaded', () => {
-    const area = document.getElementById('msg-area');
-    if (area) area.scrollTop = area.scrollHeight;
-  });
-
-  // Auto-refresh toutes les 10 secondes si une conversation est ouverte
-  @if(isset($activeConv))
-  setTimeout(() => window.location.reload(), 10000);
-  @endif
+    const container = document.getElementById('messages-container');
+    if (container) {
+        container.scrollTop = container.scrollHeight;
+    }
 </script>
+@endpush
 @endsection

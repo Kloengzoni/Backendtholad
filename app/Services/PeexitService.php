@@ -9,10 +9,9 @@ use Illuminate\Support\Facades\Log;
  * PeexitService — Intégration Collect API Peexit
  * Doc : https://peex-api-docs.peexit.com/collect/collections
  *
- * Usage :
- *   $peex = new PeexitService();
- *   $result = $peex->requestCollection([...]);
- *   $status = $peex->getTransactionStatus('TRACK_ID_123');
+ * FIX: Le constructeur ne throw plus si la clé manque.
+ *       On retourne une erreur métier depuis les méthodes,
+ *       ce qui évite le "Erreur serveur" générique côté Flutter.
  */
 class PeexitService
 {
@@ -24,11 +23,23 @@ class PeexitService
         $this->baseUrl   = rtrim(config('services.peexit.base_url', 'https://dev-backend.peexit.com/api/v1'), '/');
         $this->secretKey = config('services.peexit.secret_key', '');
 
-        // Protection : empêche un appel avec une clé vide → log clair dans Railway
         if (empty($this->secretKey)) {
-            Log::critical('[Peexit] PEEX_SECRET_KEY non configurée dans les variables d\'environnement Railway.');
+            Log::critical('[Peexit] PEEX_SECRET_KEY non configurée dans les variables Railway.');
+            // FIX: On ne throw plus ici — la vérification se fait dans les méthodes
+            // pour permettre au PaymentController de retourner un 503 propre.
+        }
+    }
+
+    /**
+     * Vérifie que la clé est configurée avant tout appel réseau.
+     * Lance une RuntimeException métier (non critique) si elle manque.
+     */
+    private function assertConfigured(): void
+    {
+        if (empty($this->secretKey)) {
             throw new \RuntimeException(
-                'PEEX_SECRET_KEY non configurée. Ajoutez-la dans les variables Railway.'
+                'Le système de paiement mobile est temporairement indisponible. ' .
+                'Veuillez contacter le support ou réessayer plus tard.'
             );
         }
     }
@@ -45,22 +56,11 @@ class PeexitService
 
     /**
      * Initier une collecte Mobile Money (MTN, Airtel, Orange…)
-     *
-     * @param  array{
-     *   track_id: string,       // Référence unique de votre côté (ex: "PAY-2025-ABCD1234")
-     *   phone: string,          // Format international : +242068XXXXXXX
-     *   amount: float,          // Montant en FCFA
-     *   currency: string,       // "XAF"
-     *   customer_name: string,  // Nom complet du client
-     *   country: string,        // Code ISO2 : "CG" pour Congo Brazzaville
-     *   description: string,    // Motif du paiement
-     * } $data
-     *
-     * @return array  Réponse Peexit avec : id, status, track_id, method, payment_proof, message
-     * @throws \RuntimeException en cas d'échec HTTP
      */
     public function requestCollection(array $data): array
     {
+        $this->assertConfigured();
+
         Log::info('[Peexit] Initiating collection', [
             'track_id' => $data['track_id'],
             'amount'   => $data['amount'],
@@ -95,14 +95,11 @@ class PeexitService
 
     /**
      * Vérifier le statut d'une transaction par son track_id
-     *
-     * Statuts possibles : new | pending | paid | failed | canceled | rejected
-     *
-     * @param  string $trackId  Votre référence unique (track_id envoyé lors de la création)
-     * @return array            Objet transaction complet avec status
      */
     public function getTransactionStatus(string $trackId): array
     {
+        $this->assertConfigured();
+
         Log::info('[Peexit] Checking transaction status', ['track_id' => $trackId]);
 
         $response = Http::withHeaders($this->headers())
@@ -134,5 +131,13 @@ class PeexitService
             'failed', 'canceled', 'rejected'     => 'échoué',
             default                              => 'en_attente',
         };
+    }
+
+    /**
+     * Indique si le service est correctement configuré
+     */
+    public function isConfigured(): bool
+    {
+        return !empty($this->secretKey);
     }
 }
