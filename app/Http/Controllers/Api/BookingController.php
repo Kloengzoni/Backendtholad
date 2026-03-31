@@ -10,17 +10,6 @@ use App\Models\Notification;
 use Illuminate\Http\Request;
 use Carbon\Carbon;
 
-/**
- * BookingController
- *
- * FIX BUG 3 (supplémentaire) :
- *   La validation 'check_in' => 'after_or_equal:today' compare avec le
- *   fuseau Railway (UTC). Le client en UTC+1 (Pointe-Noire) envoie une date
- *   qui correspond à "hier" côté serveur → validation 422 mappée en 500 par Flutter.
- *
- *   SOLUTION : remplacer after_or_equal:today par une vérification manuelle
- *   en acceptant check_in >= hier (tolérance 1 jour pour le décalage horaire).
- */
 class BookingController extends Controller
 {
     public function index(Request $request)
@@ -39,8 +28,6 @@ class BookingController extends Controller
 
     public function store(Request $request)
     {
-        // FIX BUG 3 : retirer 'after_or_equal:today' — remplacé par contrôle
-        // manuel ci-dessous (tolérance 1 jour pour décalage UTC/UTC+1).
         $request->validate([
             'property_id' => 'required|exists:properties,id',
             'check_in'    => 'required|date',
@@ -71,7 +58,6 @@ class BookingController extends Controller
         $checkOut = Carbon::parse($request->check_out);
         $nights   = $checkIn->diffInDays($checkOut);
 
-        // FIX : accepter check_in >= aujourd'hui - 1 jour (tolérance fuseau horaire)
         $yesterday = Carbon::yesterday()->startOfDay();
         if ($checkIn->lt($yesterday)) {
             return response()->json([
@@ -127,6 +113,10 @@ class BookingController extends Controller
             'notes'        => $request->notes,
         ]);
 
+        // FIX : recharger avec les relations APRÈS création
+        // pour éviter le 500 si primaryImage est null
+        $booking->load(['property.images', 'user']);
+
         Notification::create([
             'user_id' => $request->user()->id,
             'title'   => 'Réservation créée 📅',
@@ -137,7 +127,7 @@ class BookingController extends Controller
 
         return response()->json([
             'success' => true,
-            'data'    => $this->bookingResource($booking->load(['property', 'user'])),
+            'data'    => $this->bookingResource($booking),
             'message' => 'Réservation créée. Procédez au paiement.',
         ], 201);
     }
@@ -188,6 +178,11 @@ class BookingController extends Controller
     // ── Ressource ─────────────────────────────────────────────────────────────
     private function bookingResource(Booking $b): array
     {
+        // FIX : chercher dans toutes les images si primaryImage est null
+        $image = $b->property?->primaryImage?->url
+               ?? $b->property?->images?->first()?->url
+               ?? null;
+
         return [
             'id'             => $b->id,
             'reference'      => $b->reference,
@@ -209,8 +204,8 @@ class BookingController extends Controller
                 'title'       => $b->property->title,
                 'name'        => $b->property->title,
                 'city'        => $b->property->city,
-                'image_url'   => $b->property->primaryImage?->url,
-                'cover_image' => $b->property->primaryImage?->url,
+                'image_url'   => $image,
+                'cover_image' => $image,
             ] : null,
         ];
     }
